@@ -1,0 +1,51 @@
+name: Publish wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - wiki/**
+      - .github/workflows/wiki.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-wiki
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Mirror reviewed documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish wiki source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh auth setup-git
+          wiki_url="https://github.com/${GITHUB_REPOSITORY}.wiki.git"
+          git clone "${wiki_url}" .wiki-checkout
+          rsync --archive --delete --exclude .git wiki/ .wiki-checkout/
+
+          git -C .wiki-checkout config user.name "github-actions[bot]"
+          git -C .wiki-checkout config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C .wiki-checkout add --all
+
+          if git -C .wiki-checkout diff --cached --quiet; then
+            echo "Wiki is already current."
+            exit 0
+          fi
+
+          git -C .wiki-checkout commit -m "docs: publish wiki from ${GITHUB_SHA}"
+          git -C .wiki-checkout push origin HEAD:master

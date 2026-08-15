@@ -1,0 +1,41 @@
+name: Documentation problem
+description: Report unclear, missing, or incorrect public documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Page or section
+      description: Link to the README, Wiki page, command help, or community file.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong, unclear, outdated, or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: consequence
+    attributes:
+      label: User impact
+      description: What could a reader misunderstand or do incorrectly?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: Provide replacement wording or an outline when you have one.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I checked the latest version of the page.
+          required: true
+        - label: I removed asset content and credentials from examples.
+          required: true

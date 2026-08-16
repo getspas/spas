@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a product change tied to a concrete workflow.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the implementation. For changes to providers, repository shape, file types, or the security model, starting in Discussions usually produces a better design record.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What work is difficult today? Include a concrete example without repository or asset content.
+    validations:
+      required: true
+  - type: textarea
+    id: users
+    attributes:
+      label: Who has this problem?
+      description: Describe the user, team, and repository workflow affected.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What observable behavior would solve the problem?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives tried
+      description: How do you handle this now, and where does that approach fail?
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Safety and compatibility considerations
+      description: Note effects on existing commands, state, Git history, recovery, access control, or supported platforms.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and discussions for this request.
+          required: true
+        - label: I read the documented safety and product boundaries.
+          required: true

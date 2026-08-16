@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and troubleshooting
+    url: https://github.com/getspas/spas/discussions/categories/q-a
+    about: Ask for help without turning the conversation into a bug report.
+  - name: Product ideas
+    url: https://github.com/getspas/spas/discussions/categories/ideas
+    about: Explore a workflow or product direction before proposing an implementation.
+  - name: Security vulnerability
+    url: https://github.com/getspas/spas/security/advisories/new
+    about: Report suspected vulnerabilities privately. Do not open a public issue.

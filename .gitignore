@@ -1,0 +1,9 @@
+/spas
+/spas.exe
+/dist/
+/coverage.out
+*.test
+*.prof
+
+/logs/
+.DS_Store

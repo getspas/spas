@@ -84,10 +84,17 @@ spas doctor --json
 
 ### `exclusion_validation_failed` (Exit Code 9)
 
-- **Cause:** Rules in `.gitignore` conflict with or re-include SPAS managed paths, or `.git/info/exclude` was modified by another tool.
-- **Fix:** Inspect your `.gitignore` and `.git/info/exclude` files to ensure no negated patterns (`!pattern`) override SPAS exclusions.
+- **Cause:** A managed path is not effectively excluded from the project's primary Git repository. This typically happens when a `.gitignore` file (or a global `core.excludesFile`) contains a negation pattern (`!path` or `!*.json`) that re-includes a path. Because Git evaluates `.gitignore` with higher precedence than `.git/info/exclude`, the negation rule defeats SPAS's local exclusion block.
+- **Why SPAS Fails Closed:** If SPAS allowed materialization while a negation rule was active, standard Git commands (`git status`, `git add .`, `git commit`) in your main project repository would track and stage your private assets. SPAS verifies effective exclusion via `git check-ignore --no-index` before mutating the workspace and halts immediately if any managed path is not effectively ignored.
+- **How to Diagnose & Fix:**
+  1. Identify which rule is re-including the path:
 
----
+     ```bash
+     git check-ignore -v --no-index path/to/file
+     ```
+
+  2. Open the reported `.gitignore` file and remove or adjust the negation pattern (e.g. change `!config/dev.json` so it does not match SPAS-managed private files).
+  3. Run `spas doctor` to verify that all managed paths are now effectively excluded.
 
 ### `lock_held` (Exit Code 10)
 

@@ -41,6 +41,7 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving |
 | `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation |
+
 ### Link Examples
 
 ```bash
@@ -149,6 +150,7 @@ SPAS never creates commits in your project repository.
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
 | `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation |
+
 ### Sync Examples
 
 ```bash

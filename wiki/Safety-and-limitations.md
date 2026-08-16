@@ -7,9 +7,11 @@ Please review these operational boundaries before integrating SPAS into your wor
 ---
 
 ## 1. Repository Visibility & Access Control
+
 - **Public vs. Private Repositories:** SPAS automatically verifies linked repository visibility using an offline-credential-free probe (`git ls-remote` with credential helpers and prompts disabled). If the linked repository is publicly readable, SPAS requires explicit interactive confirmation or the `--allow-public` CLI flag to prevent accidental exposure of managed assets. Always ensure your repository is configured as **Private** on GitHub before syncing sensitive files.
 - **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository, but does not alter local filesystem file permissions. Anyone with local read access to your project workspace directory can read the files.
 - **Git URL Rewrites:** SPAS verifies its recorded origin URL, but respects your system and global Git configuration (including `url.*.insteadOf` and `pushInsteadOf` rewrites). Ensure your global Git configuration points to trusted remotes.
+
 ---
 
 ## 2. Workspace & Filesystem Concurrency
@@ -32,9 +34,11 @@ Please review these operational boundaries before integrating SPAS into your wor
 
 ## 4. Supported File Types & Path Constraints
 
-### Supported Files
+### Supported Files & Permission Normalization
 
-- Regular POSIX files with Git modes `100644` (standard) and `100755` (executable).
+- **Standard Regular Files (`100644`):** Non-executable regular POSIX files.
+- **Executable Regular Files (`100755`):** Executable scripts and binaries. SPAS preserves the POSIX executable permission bit across synchronization.
+- **Permission Normalization:** Git tracks only whether a file is executable (`100755`) or non-executable (`100644`). Other file attributes—such as setuid/setgid bits, sticky bits, extended filesystem attributes, and platform-specific ACLs—are normalized to standard Git modes upon commit. On Windows, executable attributes map to Git's standard executable-bit detection (`core.fileMode`).
 
 ### Strictly Prohibited & Rejected Paths
 
@@ -48,10 +52,11 @@ Please review these operational boundaries before integrating SPAS into your wor
 
 ## 5. Git Safeguards & Destructive Operations
 
-The local exclusion block inside `.git/info/exclude` prevents standard Git operations from tracking managed files. However, it is a convenience filter, not an access-control barrier:
+The local exclusion block inside `.git/info/exclude` prevents standard Git operations from tracking managed files. However, it is subject to Git precedence rules:
 
 > [!WARNING]
 >
+> - **`.gitignore` Negation Precedence:** In Git, negation rules (`!pattern`) inside `.gitignore` or global `core.excludesFile` override exclusions in `.git/info/exclude`. If a project `.gitignore` contains a rule like `!*.json` or `!config/dev.json`, SPAS's `verifyExclusion` safety probe detects that the asset is no longer effectively ignored and halts immediately with exit code 9 (`exclusion_validation_failed`) to prevent accidental tracking by the main repository.
 > - `git add -f` (force add) will bypass exclusion rules and stage private assets in your main repository.
 > - Destructive Git commands like `git clean -xdf`, forced checkouts (`git checkout -f`), or hard resets (`git reset --hard`) can delete or overwrite excluded files.
 > - **Best Practice:** Run `spas sync` before performing destructive Git operations, and review `git status` before committing.

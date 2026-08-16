@@ -32,7 +32,7 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` runs completely offline. It validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. It verifies repository visibility using an anonymous probe and prompts for confirmation if the repository is publicly readable.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -40,7 +40,7 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving |
-
+| `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation |
 ### Link Examples
 
 ```bash
@@ -148,7 +148,7 @@ SPAS never creates commits in your project repository.
 | `--continue` | Flag | `false` | Continue a merge in the linked repository after resolving conflicts |
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
-
+| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation |
 ### Sync Examples
 
 ```bash

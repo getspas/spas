@@ -1,5 +1,11 @@
 package provider
 
+import (
+	"context"
+
+	"github.com/getspas/spas/internal/gitexec"
+)
+
 // ID is the stable identifier persisted for a repository provider.
 type ID string
 
@@ -32,4 +38,5 @@ type RepositoryRef struct {
 type RepositoryProvider interface {
 	ID() ID
 	Resolve(RepositoryRequest) (RepositoryRef, error)
+	ProbePublic(context.Context, gitexec.Runner, RepositoryRef) (bool, error)
 }

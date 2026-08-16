@@ -60,11 +60,12 @@ const (
 )
 
 type LinkOptions struct {
-	Repository string
-	Transport  provider.Transport
-	Branch     string
-	Replace    bool
-	DryRun     bool
+	Repository  string
+	Transport   provider.Transport
+	Branch      string
+	Replace     bool
+	DryRun      bool
+	AllowPublic bool
 }
 
 func (a App) Link(ctx context.Context, options LinkOptions) error {
@@ -93,7 +94,26 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			return err
 		}
 	}
-
+	if !options.AllowPublic && !options.DryRun {
+		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
+		if probeErr != nil {
+			return probeErr
+		}
+		if isPublic {
+			approved, err := a.Prompt.Confirm(
+				ctx,
+				fmt.Sprintf("Repository %q is publicly readable on GitHub. Managed private assets will be publicly accessible. Continue?", ref.Canonical),
+				false,
+				false,
+			)
+			if err != nil {
+				return err
+			}
+			if !approved {
+				return fmt.Errorf("linking publicly readable repository declined")
+			}
+		}
+	}
 	state := linkstate.New(repository.Root, repository.CommonDir, ref, options.Branch, a.Store)
 	if !options.DryRun {
 		linkLock, err := lock.Acquire(filepath.Join(a.Store.DataDir, "locks"), state.LinkID)
@@ -673,14 +693,12 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 		}
 	}
 	excludedPaths := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
-	for _, path := range excludedPaths {
-		effective, err := repository.IsEffectivelyExcluded(ctx, path)
-		if err != nil {
-			return err
-		}
-		if !effective {
-			status.ExclusionFailures = append(status.ExclusionFailures, path.String())
-		}
+	unexcluded, err := repository.UnexcludedPaths(ctx, excludedPaths)
+	if err != nil {
+		return err
+	}
+	for _, path := range unexcluded {
+		status.ExclusionFailures = append(status.ExclusionFailures, path.String())
 	}
 	ignoreCase, present, err := repository.EffectiveIgnoreCase(ctx)
 	if err != nil {

@@ -7,11 +7,9 @@ Please review these operational boundaries before integrating SPAS into your wor
 ---
 
 ## 1. Repository Visibility & Access Control
-
-- **Public vs. Private Repositories:** The linked GitHub repository can be configured as public or private. SPAS uses your local Git credentials to interact with GitHub and never inspects or modifies repository visibility settings. Ensure you configure your repository as **Private** before syncing sensitive files.
+- **Public vs. Private Repositories:** SPAS automatically verifies linked repository visibility using an offline-credential-free probe (`git ls-remote` with credential helpers and prompts disabled). If the linked repository is publicly readable, SPAS requires explicit interactive confirmation or the `--allow-public` CLI flag to prevent accidental exposure of managed assets. Always ensure your repository is configured as **Private** on GitHub before syncing sensitive files.
 - **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository, but does not alter local filesystem file permissions. Anyone with local read access to your project workspace directory can read the files.
 - **Git URL Rewrites:** SPAS verifies its recorded origin URL, but respects your system and global Git configuration (including `url.*.insteadOf` and `pushInsteadOf` rewrites). Ensure your global Git configuration points to trusted remotes.
-
 ---
 
 ## 2. Workspace & Filesystem Concurrency

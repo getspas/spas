@@ -1,11 +1,13 @@
 package githubref
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 
+	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/provider"
 )
 
@@ -97,4 +99,27 @@ func fromPath(value string, transport provider.Transport) (provider.RepositoryRe
 		Transport: transport,
 		RemoteURL: remoteURL,
 	}, nil
+}
+
+// ProbePublic checks whether a GitHub repository is publicly readable without credentials.
+// It executes git ls-remote against the public HTTPS endpoint with credential helpers,
+// askpass helpers, and terminal prompts disabled.
+func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provider.RepositoryRef) (bool, error) {
+	if ref.Canonical == "" && ref.RemoteURL == "" {
+		return false, nil
+	}
+	url := "https://github.com/" + ref.Canonical + ".git"
+	if strings.HasPrefix(ref.RemoteURL, "http://") || strings.HasPrefix(ref.RemoteURL, "https://") || strings.HasPrefix(ref.RemoteURL, "file://") {
+		url = ref.RemoteURL
+	}
+	probeGit := git
+	probeGit.NonInteractive = true
+	_, err := probeGit.Run(ctx, ".", "-c", "credential.helper=", "ls-remote", url)
+	if err == nil {
+		return true, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	return false, nil
 }

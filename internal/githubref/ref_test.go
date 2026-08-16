@@ -1,8 +1,11 @@
 package githubref
 
 import (
+	"context"
+	"os/exec"
 	"testing"
 
+	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/provider"
 )
 
@@ -49,5 +52,55 @@ func TestParseRejectsCredentialsAndOtherHosts(t *testing.T) {
 		if _, err := (Provider{}).Resolve(provider.RepositoryRequest{Raw: value}); err == nil {
 			t.Errorf("Resolve(%q) error = nil, want non-nil", value)
 		}
+	}
+}
+
+func TestProbePublic(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	git := gitexec.Runner{}
+
+	// Empty ref
+	isPublic, err := (Provider{}).ProbePublic(ctx, git, provider.RepositoryRef{})
+	if err != nil || isPublic {
+		t.Fatalf("ProbePublic(empty) = %v, %v, want false, nil", isPublic, err)
+	}
+
+	// Nonexistent repo on GitHub
+	isPublic, err = (Provider{}).ProbePublic(ctx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "getspas/nonexistent-private-repo-123456789",
+		RemoteURL: "https://github.com/getspas/nonexistent-private-repo-123456789.git",
+	})
+	if err != nil || isPublic {
+		t.Fatalf("ProbePublic(nonexistent) = %v, %v, want false, nil", isPublic, err)
+	}
+
+	// Local bare repo (readable without credentials)
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "--bare", "-q", dir+"/public.git")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	isPublic, err = (Provider{}).ProbePublic(ctx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: "file://" + dir + "/public.git",
+	})
+	if err != nil || !isPublic {
+		t.Fatalf("ProbePublic(local repo) = %v, %v, want true, nil", isPublic, err)
+	}
+
+	// Canceled context
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = (Provider{}).ProbePublic(canceledCtx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: "file://" + dir + "/public.git",
+	})
+	if err == nil {
+		t.Fatal("ProbePublic(canceled) error = nil, want context error")
 	}
 }

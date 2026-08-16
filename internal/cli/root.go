@@ -167,6 +167,7 @@ func newLinkCommand(root *rootOptions) *cobra.Command {
 	var branch string
 	var replace bool
 	var dryRun bool
+	var allowPublic bool
 	command := &cobra.Command{
 		Use:   "link [OWNER/REPOSITORY | GITHUB-URL]",
 		Short: "Link this project workspace to a GitHub repository",
@@ -215,11 +216,12 @@ local-exclude update, or Git configuration change.`,
 				}
 			}
 			return instance.Link(command.Context(), app.LinkOptions{
-				Repository: repository,
-				Transport:  selectedTransport,
-				Branch:     branch,
-				Replace:    replace,
-				DryRun:     dryRun,
+				Repository:  repository,
+				Transport:   selectedTransport,
+				Branch:      branch,
+				Replace:     replace,
+				DryRun:      dryRun,
+				AllowPublic: allowPublic,
 			})
 		},
 	}
@@ -227,6 +229,7 @@ local-exclude update, or Git configuration change.`,
 	command.Flags().StringVar(&branch, "branch", "", "branch in the linked repository; otherwise discover it during first sync")
 	command.Flags().BoolVar(&replace, "replace", false, "replace an existing local link without deleting its managed checkout")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving it")
+	command.Flags().BoolVar(&allowPublic, "allow-public", false, "allow linking a publicly readable repository")
 	return command
 }
 
@@ -315,6 +318,7 @@ func newSyncCommand(root *rootOptions) *cobra.Command {
 	var continueMerge bool
 	var abortMerge bool
 	var dryRun bool
+	var allowPublic bool
 	command := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize managed assets with the linked repository",
@@ -413,6 +417,7 @@ and then writes the final assets. SPAS never creates a commit in the project rep
 				Continue:             continueMerge,
 				Abort:                abortMerge,
 				DryRun:               dryRun,
+				AllowPublic:          allowPublic,
 			})
 		},
 	}
@@ -428,6 +433,7 @@ and then writes the final assets. SPAS never creates a commit in the project rep
 	command.Flags().BoolVar(&continueMerge, "continue", false, "continue a merge in the linked repository after resolving files")
 	command.Flags().BoolVar(&abortMerge, "abort", false, "abort a merge in the linked repository and restore its local pre-merge state")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "analyze local state without cloning, fetching, committing, pushing, or persistent changes")
+	command.Flags().BoolVar(&allowPublic, "allow-public", false, "allow syncing to a publicly readable repository")
 	return command
 }
 

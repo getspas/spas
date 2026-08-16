@@ -1249,6 +1249,7 @@ func testApp(t *testing.T, publicRoot, root, remote string) (App, *bytes.Buffer)
 
 type testRepositoryProvider struct {
 	remoteURL string
+	isPublic  bool
 }
 
 func (testRepositoryProvider) ID() provider.ID { return githubref.ID }
@@ -1260,6 +1261,13 @@ func (p testRepositoryProvider) Resolve(request provider.RepositoryRequest) (pro
 	}
 	ref.RemoteURL = p.remoteURL
 	return ref, nil
+}
+
+func (p testRepositoryProvider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provider.RepositoryRef) (bool, error) {
+	if p.isPublic {
+		return true, nil
+	}
+	return (githubref.Provider{}).ProbePublic(ctx, git, ref)
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

@@ -23,6 +23,7 @@ import (
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/privategit"
+	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/publicgit"
 	"github.com/getspas/spas/internal/recovery"
 	"github.com/getspas/spas/internal/spaserr"
@@ -51,6 +52,7 @@ type SyncOptions struct {
 	Continue             bool
 	Abort                bool
 	DryRun               bool
+	AllowPublic          bool
 }
 
 var ErrPrivateMergeConflict = errors.New("private merge conflict")
@@ -127,6 +129,32 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		return err
 	}
 
+	if !options.AllowPublic && a.Provider != nil {
+		ref := provider.RepositoryRef{
+			Provider:  state.Private.Provider,
+			Canonical: state.Private.Repository,
+			Transport: state.Private.Transport,
+			RemoteURL: state.Private.RemoteURL,
+		}
+		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
+		if probeErr != nil {
+			return probeErr
+		}
+		if isPublic {
+			approved, err := a.Prompt.Confirm(
+				ctx,
+				fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
+				false,
+				false,
+			)
+			if err != nil {
+				return err
+			}
+			if !approved {
+				return fmt.Errorf("syncing to publicly readable repository declined")
+			}
+		}
+	}
 	ignoreCase, err := a.casePolicy(ctx, repository)
 	if err != nil {
 		return err
@@ -2030,17 +2058,15 @@ func (a App) verifyExclusion(ctx context.Context, repository publicgit.Repositor
 		}
 		verifyPaths = append(verifyPaths, tempProbe)
 	}
-	for _, path := range verifyPaths {
-		effective, err := repository.IsEffectivelyExcluded(ctx, path)
-		if err != nil {
-			return err
-		}
-		if !effective {
-			return spaserr.Wrap(
-				spaserr.KindExclusionValidation,
-				fmt.Errorf("%q is not effectively excluded from public Git; a higher-precedence .gitignore rule may re-include it", path),
-			)
-		}
+	unexcluded, err := repository.UnexcludedPaths(ctx, verifyPaths)
+	if err != nil {
+		return err
+	}
+	if len(unexcluded) > 0 {
+		return spaserr.Wrap(
+			spaserr.KindExclusionValidation,
+			fmt.Errorf("%q is not effectively excluded from public Git; a higher-precedence .gitignore rule may re-include it", unexcluded[0]),
+		)
 	}
 	return nil
 }

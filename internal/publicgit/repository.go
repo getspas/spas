@@ -157,15 +157,58 @@ func (r Repository) InfoExcludePath(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
+func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (map[pathmodel.Path]bool, error) {
+	if len(paths) == 0 {
+		return make(map[pathmodel.Path]bool), nil
+	}
+	result, err := r.Git.RunInput(
+		ctx,
+		r.Root,
+		pathspecInput(paths),
+		"check-ignore",
+		"--no-index",
+		"--stdin",
+		"-z",
+	)
+	if err != nil {
+		if code, ok := gitexec.ExitCode(err); !ok || code != 1 {
+			return nil, fmt.Errorf("check public exclusions: %w", err)
+		}
+	}
+	ignored, err := parsePaths(result.Stdout)
+	if err != nil {
+		return nil, fmt.Errorf("parse ignored paths: %w", err)
+	}
+	set := make(map[pathmodel.Path]bool, len(ignored))
+	for _, path := range ignored {
+		set[path] = true
+	}
+	return set, nil
+}
+
+func (r Repository) UnexcludedPaths(ctx context.Context, paths []pathmodel.Path) ([]pathmodel.Path, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	excluded, err := r.ExcludedPaths(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	var unexcluded []pathmodel.Path
+	for _, path := range paths {
+		if !excluded[path] {
+			unexcluded = append(unexcluded, path)
+		}
+	}
+	return unexcluded, nil
+}
+
 func (r Repository) IsEffectivelyExcluded(ctx context.Context, path pathmodel.Path) (bool, error) {
-	_, err := r.Git.Run(ctx, r.Root, "check-ignore", "--no-index", "--quiet", "--", path.String())
-	if err == nil {
-		return true, nil
+	excluded, err := r.ExcludedPaths(ctx, []pathmodel.Path{path})
+	if err != nil {
+		return false, err
 	}
-	if code, ok := gitexec.ExitCode(err); ok && code == 1 {
-		return false, nil
-	}
-	return false, fmt.Errorf("check public exclusion for %q: %w", path, err)
+	return excluded[path], nil
 }
 
 func (r Repository) EffectiveIgnoreCase(ctx context.Context) (bool, bool, error) {

@@ -472,6 +472,73 @@ func TestIsEffectivelyExcludedDistinguishesMissingRule(t *testing.T) {
 		t.Fatalf("IsEffectivelyExcluded(rule) = %t, %v", excluded, err)
 	}
 }
+func TestBatchExclusionChecks(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	repository, err := Discover(ctx, gitexec.Runner{}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty slice test
+	emptyMap, err := repository.ExcludedPaths(ctx, nil)
+	if err != nil || len(emptyMap) != 0 {
+		t.Fatalf("ExcludedPaths(nil) = %v, %v", emptyMap, err)
+	}
+	emptySlice, err := repository.UnexcludedPaths(ctx, nil)
+	if err != nil || len(emptySlice) != 0 {
+		t.Fatalf("UnexcludedPaths(nil) = %v, %v", emptySlice, err)
+	}
+
+	p1, _ := pathmodel.Parse("config/dev.json")
+	p2, _ := pathmodel.Parse("config/prod.json")
+	p3, _ := pathmodel.Parse("src/main.go")
+	paths := []pathmodel.Path{p1, p2, p3}
+
+	// No rules
+	excluded, err := repository.ExcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(excluded) != 0 {
+		t.Fatalf("ExcludedPaths(none) = %v, want empty", excluded)
+	}
+	unexcluded, err := repository.UnexcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unexcluded) != 3 {
+		t.Fatalf("UnexcludedPaths(none) = %v, want 3 paths", unexcluded)
+	}
+
+	// Exclude p1 and p2
+	excludePath, err := repository.InfoExcludePath(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(excludePath, []byte("/config/dev.json\n/config/prod.json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	excluded, err = repository.ExcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !excluded[p1] || !excluded[p2] || excluded[p3] {
+		t.Fatalf("ExcludedPaths(mixed) = %v", excluded)
+	}
+
+	unexcluded, err = repository.UnexcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unexcluded) != 1 || unexcluded[0] != p3 {
+		t.Fatalf("UnexcludedPaths(mixed) = %v, want [%v]", unexcluded, p3)
+	}
+}
 
 func TestSwapASCIIcase(t *testing.T) {
 	t.Parallel()

@@ -372,12 +372,14 @@ func (a App) Doctor(ctx context.Context) error {
 	}
 
 	var exclusionFailures []string
-	for _, path := range privatePaths {
-		effective, checkErr := repository.IsEffectivelyExcluded(ctx, path)
-		if checkErr != nil {
-			exclusionFailures = append(exclusionFailures, fmt.Sprintf("%s: %v", path, checkErr))
-		} else if !effective {
-			exclusionFailures = append(exclusionFailures, path.String())
+	excluded, checkErr := repository.ExcludedPaths(ctx, privatePaths)
+	if checkErr != nil {
+		exclusionFailures = append(exclusionFailures, fmt.Sprintf("exclusion check: %v", checkErr))
+	} else {
+		for _, path := range privatePaths {
+			if !excluded[path] {
+				exclusionFailures = append(exclusionFailures, path.String())
+			}
 		}
 	}
 	if len(exclusionFailures) > 0 {

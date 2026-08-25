@@ -575,6 +575,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	rollbackNeeded = false
 
 	var finalPaths []pathmodel.Path
+	var finalExclude []pathmodel.Path
 	materializeSkip := unionSets(skipped, deferred)
 	finalPendingAdds := retainStrings(
 		state.PendingAdds,
@@ -764,7 +765,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if err := verifyOwnershipApprovals(ctx, repository, overridePublic, overrideStatuses, overrideSnapshots); err != nil {
 			return err
 		}
-		finalExclude := unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
+		finalExclude = unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
 		recoveryPaths := filterRecoveryPaths(
 			unionPaths(mapPathValues(obstructionOverrides), mapPathValues(overridePublic)),
 			finalPaths,
@@ -823,7 +824,6 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 
 	// The exclude block is written and proven effective before any private
 	// content reaches the public working tree.
-	finalExclude := unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
 	finalExcludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, finalExclude)
 	if err != nil {
 		return err
@@ -3217,7 +3217,7 @@ func planLocalChanges(
 			continue
 		}
 		if !existed {
-			if isPending && !isManaged {
+			if !isManaged {
 				// The enrolled file is temporarily missing; keep the
 				// enrollment and its exclusion instead of dropping them.
 				plan.DeferredAdds = append(plan.DeferredAdds, path)
@@ -3465,8 +3465,7 @@ func caseRenamePreRemovals(
 			return nil, nil, err
 		}
 		canonical := pathmodel.Canonical(path, true)
-		final, found := finalByCanonical[canonical]
-		if !found || final == path {
+		if _, found := finalByCanonical[canonical]; !found {
 			continue
 		}
 		result = append(result, path)

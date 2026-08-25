@@ -129,7 +129,7 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 	if loadErr != nil && !errors.Is(loadErr, linkstate.ErrNotLinked) {
 		return loadErr
 	}
-	if loadErr == nil && options.Replace &&
+	if loadErr == nil &&
 		(existing.Private.Initialized ||
 			existing.Private.Initialization != nil ||
 			len(existing.ManagedPaths) > 0 ||
@@ -150,7 +150,7 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			"networkAccess":     false,
 		})
 	}
-	if loadErr == nil && options.Replace && a.Prompt.Interactive {
+	if loadErr == nil && a.Prompt.Interactive {
 		approved, err := a.Prompt.Confirm(
 			ctx,
 			fmt.Sprintf("Replace the existing local link to %s?", existing.Private.Repository),
@@ -452,7 +452,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 			if err != nil {
 				return err
 			}
-		} else if isPending {
+		} else {
 			path, err = authoritativeManagedPath(repository.Root, requested, pendingPath)
 			if err != nil {
 				return err

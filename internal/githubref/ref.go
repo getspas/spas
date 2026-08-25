@@ -43,10 +43,8 @@ func (Provider) Resolve(request provider.RepositoryRequest) (provider.Repository
 		if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
 			return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain a query string or fragment")
 		}
-		if parsed.User != nil {
-			if _, present := parsed.User.Password(); present {
-				return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain credentials")
-			}
+		if _, present := parsed.User.Password(); present {
+			return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain credentials")
 		}
 		if request.Transport != "" && request.Transport != provider.SSH {
 			return provider.RepositoryRef{}, fmt.Errorf("repository URL uses SSH but --transport is %q", request.Transport)

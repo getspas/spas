@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -438,5 +439,37 @@ func runGit(t *testing.T, dir string, args ...string) {
 	command.Dir = dir
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func TestDoctorCommandUnlinked(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"doctor", "--repo", dir})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute(doctor) error = %v\n%s", err, output.String())
+	}
+	text := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("output missing %q: %s", expected, text)
+		}
+	}
+
+	output.Reset()
+	root = NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"doctor", "--repo", dir, "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute(doctor --json) error = %v\n%s", err, output.String())
+	}
+	var result app.DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode doctor json: %v\n%s", err, output.String())
+	}
+	if !result.Healthy || result.Errors != 0 {
+		t.Fatalf("doctor result = %#v, want healthy", result)
 	}
 }

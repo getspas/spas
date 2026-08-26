@@ -1543,3 +1543,218 @@ func TestLinkedStrictlyReResolvesPersistedRepositoryIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestDoctorUnlinkedNonGitWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	instance.JSON = true
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() error = %v\n%s", err, output.String())
+	}
+	var doctor DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
+		t.Fatalf("decode doctor: %v\n%s", err, output.String())
+	}
+	if !doctor.Healthy || doctor.Errors != 0 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result", doctor)
+	}
+	checks := make(map[string]string)
+	for _, check := range doctor.Checks {
+		checks[check.Name] = check.Status
+	}
+	for _, expected := range []string{"git", "data-dirs", "lock"} {
+		if status, ok := checks[expected]; !ok || status != "ok" {
+			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
+		}
+	}
+
+	// Test text rendering mode as well
+	output.Reset()
+	instance.JSON = false
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() text error = %v\n%s", err, output.String())
+	}
+	textOutput := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok"} {
+		if !strings.Contains(textOutput, expected) {
+			t.Errorf("text output missing %q: %s", expected, textOutput)
+		}
+	}
+}
+
+func TestDoctorUnlinkedGitWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	gitDir := filepath.Join(root, "unlinked-repo")
+	if err := os.MkdirAll(gitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "init", "-q", "-b", "main")
+	runGit(t, gitDir, "config", "user.name", "Test User")
+	runGit(t, gitDir, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(gitDir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "add", "README.md")
+	runGit(t, gitDir, "commit", "-q", "-m", "initial")
+
+	instance, output := testApp(t, gitDir, root, "")
+	instance.JSON = true
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() error = %v\n%s", err, output.String())
+	}
+	var doctor DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
+		t.Fatalf("decode doctor: %v\n%s", err, output.String())
+	}
+	if !doctor.Healthy || doctor.Errors != 0 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result", doctor)
+	}
+	checks := make(map[string]string)
+	for _, check := range doctor.Checks {
+		checks[check.Name] = check.Status
+	}
+	for _, expected := range []string{"git", "data-dirs", "lock", "worktrees"} {
+		if status, ok := checks[expected]; !ok || status != "ok" {
+			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
+		}
+	}
+}
+
+func TestDoctorUnlinkedGitWorkspaceMultipleWorktrees(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	gitDir := filepath.Join(root, "unlinked-repo")
+	if err := os.MkdirAll(gitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "init", "-q", "-b", "main")
+	runGit(t, gitDir, "config", "user.name", "Test User")
+	runGit(t, gitDir, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(gitDir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "add", "README.md")
+	runGit(t, gitDir, "commit", "-q", "-m", "initial")
+
+	second := filepath.Join(root, "second-worktree")
+	runGit(t, gitDir, "worktree", "add", "-q", "-b", "second", second)
+
+	instance, output := testApp(t, gitDir, root, "")
+	instance.JSON = true
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want multiple-worktree error in unlinked repo", doctor)
+	}
+	foundWorktreeError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "worktrees" && check.Status == "error" {
+			foundWorktreeError = true
+			break
+		}
+	}
+	if !foundWorktreeError {
+		t.Fatalf("expected worktrees check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestDoctorUnlinkedDataDirUnwritable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	// Make DataDir a file so MkdirAll fails
+	dataBlocker := filepath.Join(root, "data-blocker")
+	if err := os.WriteFile(dataBlocker, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	instance.Store.DataDir = dataBlocker
+	instance.JSON = true
+
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want error when data dir is unwritable", doctor)
+	}
+	foundDataDirError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "data-dirs" && check.Status == "error" {
+			foundDataDirError = true
+			break
+		}
+	}
+	if !foundDataDirError {
+		t.Fatalf("expected data-dirs check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestDoctorUnlinkedGitError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	instance.Git.Path = filepath.Join(root, "non-existent-git-binary")
+	instance.JSON = true
+
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want error when git is unavailable", doctor)
+	}
+	foundGitError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "git" && check.Status == "error" {
+			foundGitError = true
+			break
+		}
+	}
+	if !foundGitError {
+		t.Fatalf("expected git check to have status error, checks=%#v", doctor.Checks)
+	}
+}

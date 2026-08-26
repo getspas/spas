@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -12,8 +14,10 @@ import (
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/publicgit"
 )
 
@@ -196,10 +200,6 @@ type DoctorCheck struct {
 }
 
 func (a App) Doctor(ctx context.Context) error {
-	repository, state, err := a.linked(ctx)
-	if err != nil {
-		return err
-	}
 	result := DoctorResult{Healthy: true}
 	add := func(name, status, message string) {
 		result.Checks = append(result.Checks, DoctorCheck{Name: name, Status: status, Message: message})
@@ -211,17 +211,42 @@ func (a App) Doctor(ctx context.Context) error {
 			result.Healthy = false
 		}
 	}
-	if state.Materializing != nil {
-		add("pending-recovery", "error", "a previous sync has a private result waiting to be pushed or materialized; run spas sync")
-	} else {
-		add("pending-recovery", "ok", "no interrupted push or materialization")
-	}
 
-	version, err := a.Git.Run(ctx, repository.Root, "--version")
+	dir := a.RepoHint
+	if dir == "" {
+		dir = "."
+	}
+	version, err := a.Git.Run(ctx, dir, "--version")
 	if err != nil {
 		add("git", "error", err.Error())
+	} else if reqErr := publicgit.RequireSupportedGit(ctx, a.Git); reqErr != nil {
+		add("git", "error", reqErr.Error())
 	} else {
 		add("git", "ok", strings.TrimSpace(string(version.Stdout)))
+	}
+
+	configErr := checkDirectoryWritable(a.Store.ConfigDir)
+	dataErr := checkDirectoryWritable(a.Store.DataDir)
+	if configErr != nil && dataErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("config dir %q: %v; data dir %q: %v", a.Store.ConfigDir, configErr, a.Store.DataDir, dataErr))
+	} else if configErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("config dir %q: %v", a.Store.ConfigDir, configErr))
+	} else if dataErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("data dir %q: %v", a.Store.DataDir, dataErr))
+	} else {
+		add("data-dirs", "ok", "config and data directories are writable")
+	}
+
+	lockDir := filepath.Join(a.Store.DataDir, "locks")
+	if lockErr := checkLockAcquirable(lockDir); lockErr != nil {
+		add("lock", "error", fmt.Sprintf("advisory lock check failed: %v", lockErr))
+	} else {
+		add("lock", "ok", "advisory file locking is functional")
+	}
+
+	repository, repoErr := a.publicRepository(ctx)
+	if repoErr != nil {
+		return a.renderDoctorResult(result)
 	}
 
 	worktrees, err := repository.WorktreeCount(ctx)
@@ -231,6 +256,27 @@ func (a App) Doctor(ctx context.Context) error {
 		add("worktrees", "error", "multiple public worktrees share the repository-local exclude file; mutating commands are disabled in the current implementation")
 	} else {
 		add("worktrees", "ok", "single public worktree")
+	}
+
+	state, err := a.loadState(repository.Root, repository.CommonDir)
+	if err != nil {
+		if errors.Is(err, linkstate.ErrNotLinked) {
+			return a.renderDoctorResult(result)
+		}
+		add("link-state", "error", fmt.Sprintf("invalid link state: %v", err))
+		return a.renderDoctorResult(result)
+	}
+
+	if state.Private.Branch != "" {
+		if branchErr := privategit.ValidateBranchName(ctx, a.Git, repository.Root, state.Private.Branch); branchErr != nil {
+			add("link-state", "error", fmt.Sprintf("link state contains invalid private branch %q: %v", state.Private.Branch, branchErr))
+		}
+	}
+
+	if state.Materializing != nil {
+		add("pending-recovery", "error", "a previous sync has a private result waiting to be pushed or materialized; run spas sync")
+	} else {
+		add("pending-recovery", "ok", "no interrupted push or materialization")
 	}
 
 	configCase, present, err := repository.EffectiveIgnoreCase(ctx)
@@ -398,6 +444,10 @@ func (a App) Doctor(ctx context.Context) error {
 		add("exclude-block-integrity", "ok", "the SPAS local-exclude block matches the managed file set")
 	}
 
+	return a.renderDoctorResult(result)
+}
+
+func (a App) renderDoctorResult(result DoctorResult) error {
 	if a.JSON {
 		if err := a.write(result); err != nil {
 			return err
@@ -416,6 +466,33 @@ func (a App) Doctor(ctx context.Context) error {
 		return fmt.Errorf("doctor found %d error(s)", result.Errors)
 	}
 	return nil
+}
+
+func checkDirectoryWritable(dir string) error {
+	if dir == "" {
+		return errors.New("directory path is empty")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tempFile, err := os.CreateTemp(dir, ".doctor-probe-*")
+	if err != nil {
+		return err
+	}
+	tempName := tempFile.Name()
+	_ = tempFile.Close()
+	_ = os.Remove(tempName)
+	return nil
+}
+
+func checkLockAcquirable(lockDir string) error {
+	testLock, err := lock.Acquire(lockDir, ".doctor-probe")
+	if err != nil {
+		return err
+	}
+	releaseErr := testLock.Release()
+	removeErr := os.Remove(filepath.Join(lockDir, ".doctor-probe.lock"))
+	return errors.Join(releaseErr, removeErr)
 }
 
 func (a App) originConfigShape(ctx context.Context, privatePath string) (string, bool, error) {

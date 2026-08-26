@@ -87,6 +87,8 @@ func (r Repository) PrepareClone(ctx context.Context, remoteURL, requestedBranch
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
+		"-c", "commit.gpgsign=false",
+		"-c", "tag.gpgsign=false",
 		"clone", "--no-checkout", "--origin", "origin", "--", remoteURL, staging,
 	}
 	if _, err := r.Git.RunStreaming(ctx, parent, cloneArgs...); err != nil {
@@ -1118,6 +1120,8 @@ func (r Repository) verifySafetyConfig(ctx context.Context) error {
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
+		{"commit.gpgsign", "false"},
+		{"tag.gpgsign", "false"},
 	}
 	for _, setting := range settings {
 		result, err := r.Git.Run(ctx, r.Path, "config", "--local", "--get", setting[0])
@@ -1147,6 +1151,8 @@ func (r Repository) applySafetyConfig(ctx context.Context) error {
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
+		{"commit.gpgsign", "false"},
+		{"tag.gpgsign", "false"},
 	}
 	for _, setting := range settings {
 		if _, err := r.Git.Run(ctx, r.Path, "config", "--local", setting[0], setting[1]); err != nil {
@@ -1365,6 +1371,8 @@ func (r Repository) safeArgs(args ...string) []string {
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
+		"-c", "commit.gpgsign=false",
+		"-c", "tag.gpgsign=false",
 	}
 	return append(prefix, args...)
 }

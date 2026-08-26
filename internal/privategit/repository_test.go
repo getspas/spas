@@ -1245,3 +1245,64 @@ func TestCommitPreservesCommentPrefixedReason(t *testing.T) {
 		t.Fatalf("commit reason = %q, want %q", got, reason)
 	}
 }
+
+func TestCommitNeutralizesGPGSigning(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "user.name", "SPAS Test")
+	runGit(t, root, "config", "user.email", "spas@example.invalid")
+	runGit(t, root, "config", "--local", "commit.gpgsign", "true")
+	runGit(t, root, "config", "--local", "tag.gpgsign", "true")
+	runGit(t, root, "config", "--local", "gpg.program", filepath.Join(root, "missing-gpg"))
+	if err := os.WriteFile(filepath.Join(root, "private.txt"), []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "private.txt")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety"),
+	}
+	if err := repository.prepareSafetyFiles(); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "commit with gpgsign neutralized"
+	if err := repository.Commit(ctx, reason); err != nil {
+		t.Fatalf("Commit() error = %v, want successful commit with neutralized gpgsign", err)
+	}
+	if got := strings.TrimSpace(gitOutput(t, root, "log", "-1", "--format=%B")); got != reason {
+		t.Fatalf("commit reason = %q, want %q", got, reason)
+	}
+}
+
+func TestEnsureSafetyConfiguresSigningSettings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "--local", "commit.gpgsign", "true")
+	runGit(t, root, "config", "--local", "tag.gpgsign", "true")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety"),
+	}
+	if err := repository.EnsureSafety(ctx); err != nil {
+		t.Fatalf("EnsureSafety() error = %v", err)
+	}
+	for _, key := range []string{"commit.gpgsign", "tag.gpgsign", "core.autocrlf", "core.fsmonitor"} {
+		result, err := repository.Git.Run(ctx, root, "config", "--local", "--get", key)
+		if err != nil {
+			t.Fatalf("read %s: %v", key, err)
+		}
+		if got := strings.TrimSpace(string(result.Stdout)); got != "false" {
+			t.Fatalf("%s = %q, want false", key, got)
+		}
+	}
+}

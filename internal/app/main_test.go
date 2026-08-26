@@ -47,6 +47,10 @@ func runGitProxy() int {
 		_, _ = os.Stderr.WriteString("injected Git failure\n")
 		return 1
 	}
+	if mode == "fail-commit" && containsArgument(args, "commit") {
+		_, _ = os.Stderr.WriteString("injected Git commit failure\n")
+		return 1
+	}
 	if mode == "edit-private-on-abort-tracked-paths" &&
 		containsArgument(args, "ls-files") &&
 		containsArgument(args, "--cached") {

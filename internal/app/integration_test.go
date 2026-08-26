@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -632,6 +633,55 @@ func TestUnlinkRefusesCleanUnpushedPrivateCommit(t *testing.T) {
 }
 
 func TestFailedPrivateCommitRollsBackManagedClone(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot, _, instance := initializedApp(t, root)
+	_, state, err := instance.linked(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := instance.privateRepository(state)
+	headBefore, err := private.Head(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPAS_APP_GIT_PROXY", "fail-commit")
+	t.Setenv("SPAS_APP_REAL_GIT", realGit)
+	instance.Git.Path = os.Args[0]
+	if err := os.WriteFile(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md"), []byte("cannot commit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Sync(ctx, SyncOptions{
+		Message:         "This commit must fail",
+		Conflict:        ConflictAbort,
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeEnable,
+	})
+	if err == nil {
+		t.Fatal("Sync() error = nil, want commit failure")
+	}
+	clean, cleanErr := private.IsClean(ctx)
+	if cleanErr != nil {
+		t.Fatal(cleanErr)
+	}
+	if !clean {
+		t.Fatal("private clone remained dirty after failed commit")
+	}
+	headAfter, headErr := private.Head(ctx)
+	if headErr != nil {
+		t.Fatal(headErr)
+	}
+	if headAfter != headBefore {
+		t.Fatalf("private HEAD changed from %s to %s", headBefore, headAfter)
+	}
+}
+
+func TestSyncIgnoresGlobalCommitGpgSign(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -648,32 +698,25 @@ func TestFailedPrivateCommitRollsBackManagedClone(t *testing.T) {
 	}
 	runGit(t, state.Private.LocalRepositoryPath, "config", "--local", "commit.gpgsign", "true")
 	runGit(t, state.Private.LocalRepositoryPath, "config", "--local", "gpg.program", filepath.Join(root, "missing-gpg"))
-	if err := os.WriteFile(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md"), []byte("cannot commit\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md"), []byte("gpgsign neutralized\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	err = instance.Sync(ctx, SyncOptions{
-		Message:         "This commit must fail",
+		Message:         "This commit succeeds because commit.gpgsign is neutralized",
 		Conflict:        ConflictAbort,
 		ExistingExclude: ExcludePreserve,
 		MergeProtection: MergeEnable,
 	})
-	if err == nil {
-		t.Fatal("Sync() error = nil, want signing failure")
-	}
-	clean, cleanErr := private.IsClean(ctx)
-	if cleanErr != nil {
-		t.Fatal(cleanErr)
-	}
-	if !clean {
-		t.Fatal("private clone remained dirty after failed commit")
+	if err != nil {
+		t.Fatalf("Sync() error = %v, want successful sync with commit.gpgsign neutralized", err)
 	}
 	headAfter, headErr := private.Head(ctx)
 	if headErr != nil {
 		t.Fatal(headErr)
 	}
-	if headAfter != headBefore {
-		t.Fatalf("private HEAD changed from %s to %s", headBefore, headAfter)
+	if headAfter == headBefore {
+		t.Fatal("private HEAD did not advance after successful sync")
 	}
 }
 

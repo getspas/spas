@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -62,8 +63,9 @@ func Execute() int {
 					"message": err.Error(),
 				}
 				_ = json.NewEncoder(root.ErrOrStderr()).Encode(map[string]any{
-					"ok":    false,
-					"error": payload,
+					"schemaVersion": app.JSONSchemaVersion,
+					"ok":            false,
+					"error":         payload,
 				})
 			}
 		} else {
@@ -75,15 +77,20 @@ func Execute() int {
 }
 
 func jsonRequested(arguments []string) bool {
+	requested := false
 	for _, argument := range arguments {
 		if argument == "--" {
-			return false
+			break
 		}
-		if argument == "--json" || argument == "--json=true" {
-			return true
+		if argument == "--json" {
+			requested = true
+		} else if strings.HasPrefix(argument, "--json=") {
+			if val, err := strconv.ParseBool(strings.TrimPrefix(argument, "--json=")); err == nil {
+				requested = val
+			}
 		}
 	}
-	return false
+	return requested
 }
 
 func NewRootContext(parent context.Context, in io.Reader, out, errOut io.Writer) *cobra.Command {

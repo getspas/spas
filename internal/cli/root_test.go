@@ -295,10 +295,23 @@ func TestUnknownCommandClassifiesAsInvalidUsage(t *testing.T) {
 func TestJSONModeIsRecognizedBeforeCommandResolution(t *testing.T) {
 	t.Parallel()
 
-	if !jsonRequested([]string{"--json", "unknown"}) ||
-		!jsonRequested([]string{"unknown", "--json=true"}) ||
-		jsonRequested([]string{"--", "--json"}) {
-		t.Fatal("jsonRequested() did not preserve root JSON framing for pre-execution errors")
+	for _, test := range []struct {
+		args []string
+		want bool
+	}{
+		{args: []string{"--json", "unknown"}, want: true},
+		{args: []string{"unknown", "--json=true"}, want: true},
+		{args: []string{"unknown", "--json=1"}, want: true},
+		{args: []string{"--", "--json"}, want: false},
+		{args: []string{"--json=false", "unknown"}, want: false},
+		{args: []string{"--json=0", "unknown"}, want: false},
+		{args: []string{"--json", "--json=false"}, want: false},
+		{args: []string{"--json=false", "--json"}, want: true},
+		{args: []string{"--json", "--", "--json=false"}, want: true},
+	} {
+		if got := jsonRequested(test.args); got != test.want {
+			t.Errorf("jsonRequested(%v) = %t, want %t", test.args, got, test.want)
+		}
 	}
 }
 
@@ -469,7 +482,7 @@ func TestDoctorCommandUnlinked(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatalf("decode doctor json: %v\n%s", err, output.String())
 	}
-	if !result.Healthy || result.Errors != 0 {
-		t.Fatalf("doctor result = %#v, want healthy", result)
+	if result.SchemaVersion != app.JSONSchemaVersion || !result.Healthy || result.Errors != 0 {
+		t.Fatalf("doctor result = %#v, want healthy with schemaVersion %d", result, app.JSONSchemaVersion)
 	}
 }

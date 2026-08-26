@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/getspas/spas/internal/limits"
 )
@@ -25,6 +26,7 @@ type Runner struct {
 	// retrieve missing promisor objects.
 	NoLazyFetch     bool
 	NoOptionalLocks bool
+	Timeout         time.Duration
 }
 
 type Result struct {
@@ -91,7 +93,13 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 		path = "git"
 	}
 
-	commandCtx, cancel := context.WithCancel(ctx)
+	commandCtx := ctx
+	var cancel context.CancelFunc
+	if r.Timeout > 0 {
+		commandCtx, cancel = context.WithTimeout(ctx, r.Timeout)
+	} else {
+		commandCtx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, path, args...)
 	cmd.Dir = dir
@@ -146,10 +154,12 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 	if limitErr := outputLimitError(stdout, stderr); limitErr != nil {
 		return Result{}, limitErr
 	}
+	if commandCtx.Err() != nil {
+		return result, fmt.Errorf("git %s: %w", operationName(args), commandCtx.Err())
+	}
 	if err == nil {
 		return result, nil
 	}
-
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		result.ExitCode = exitErr.ExitCode()

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/getspas/spas/internal/app"
 	"github.com/getspas/spas/internal/appdirs"
@@ -31,6 +32,8 @@ type rootOptions struct {
 	json           bool
 	gitPath        string
 	verbose        bool
+	timeout        time.Duration
+	cancel         context.CancelFunc
 }
 
 func Execute() int {
@@ -99,6 +102,17 @@ commit in the project repository.`,
 		SilenceUsage:  true,
 		Version:       version.Version,
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			if options.timeout < 0 {
+				return spaserr.Wrap(
+					spaserr.KindInvalidUsage,
+					fmt.Errorf("--timeout cannot be negative: %v", options.timeout),
+				)
+			}
+			if options.timeout > 0 {
+				var timeoutCtx context.Context
+				timeoutCtx, options.cancel = context.WithTimeout(command.Context(), options.timeout)
+				command.SetContext(timeoutCtx)
+			}
 			if !options.verbose || options.json {
 				return nil
 			}
@@ -119,6 +133,11 @@ commit in the project repository.`,
 			)
 			return err
 		},
+		PersistentPostRun: func(command *cobra.Command, _ []string) {
+			if options.cancel != nil {
+				options.cancel()
+			}
+		},
 	}
 	root.SetContext(ctx)
 	root.SetIn(in)
@@ -134,7 +153,7 @@ commit in the project repository.`,
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
 	root.PersistentFlags().BoolVarP(&options.verbose, "verbose", "v", false, "show additional diagnostics without file contents")
-
+	root.PersistentFlags().DurationVar(&options.timeout, "timeout", 0, "maximum duration for command execution (default: no timeout)")
 	root.AddCommand(
 		newLinkCommand(options),
 		newAddCommand(options),
@@ -646,6 +665,7 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 		// deterministically instead of hanging while the link lock is held.
 		NonInteractive: !prompt.Interactive,
 		Stdin:          command.InOrStdin(),
+		Timeout:        options.timeout,
 	}
 	if !options.json {
 		git.Stdout = command.OutOrStdout()

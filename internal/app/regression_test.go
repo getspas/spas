@@ -8,6 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/getspas/spas/internal/filesync"
+	"github.com/getspas/spas/internal/gitexec"
+	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/spaserr"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,13 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/getspas/spas/internal/filesync"
-	"github.com/getspas/spas/internal/gitexec"
-	"github.com/getspas/spas/internal/interaction"
-	"github.com/getspas/spas/internal/linkstate"
-	"github.com/getspas/spas/internal/pathmodel"
-	"github.com/getspas/spas/internal/spaserr"
+	"time"
 )
 
 // fixture creates a public repository with one committed public file, a bare
@@ -3010,5 +3010,34 @@ func TestUnlinkWorkspacePathsIncludesActiveMergeConflicts(t *testing.T) {
 	want := []string{"managed.txt", "remote/new-conflict.txt"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unlinkWorkspacePaths() = %v, want %v", got, want)
+	}
+}
+
+func TestSyncTimesOutWhenGitNetworkStalls(t *testing.T) {
+	t.Parallel()
+
+	instance, publicRoot, _, _ := fixture(t)
+	path := filepath.Join(publicRoot, "secret.txt")
+	if err := os.WriteFile(path, []byte("secret content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Add(context.Background(), AddOptions{
+		Paths:           []string{"secret.txt"},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer cancel()
+
+	err := instance.Sync(timeoutCtx, syncOptions("sync with timeout"))
+	if err == nil {
+		t.Fatal("Sync() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("Sync() error = %v, want context deadline exceeded", err)
 	}
 }

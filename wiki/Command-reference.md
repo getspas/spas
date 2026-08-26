@@ -16,6 +16,7 @@ The following flags apply to all SPAS commands:
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
+| `--timeout DURATION` | String | Maximum execution duration (e.g. `30s`, `5m`; default: no timeout) |
 | `-h, --help` | Flag | Display help information for the command |
 | `--version` | Flag | Display version information (root command only) |
 

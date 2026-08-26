@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/limits"
@@ -1304,5 +1305,58 @@ func TestEnsureSafetyConfiguresSigningSettings(t *testing.T) {
 		if got := strings.TrimSpace(string(result.Stdout)); got != "false" {
 			t.Fatalf("%s = %q, want false", key, got)
 		}
+	}
+}
+
+func TestNetworkOperationsReturnAuthNetworkOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer cancel()
+
+	repo := Repository{
+		Path:      filepath.Join(root, "clone1"),
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety1"),
+	}
+
+	// PrepareClone on remote with timeout wraps in KindAuthNetwork
+	_, err := repo.PrepareClone(timeoutCtx, remote, "main")
+	if err == nil {
+		t.Fatal("PrepareClone() error = nil, want timeout error")
+	}
+	kind, ok := spaserr.KindOf(err)
+	if !ok || kind != spaserr.KindAuthNetwork {
+		t.Fatalf("PrepareClone() error kind = %v, want KindAuthNetwork; err = %v", kind, err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("PrepareClone() error = %v, want context deadline exceeded", err)
+	}
+
+	repoNormal := Repository{
+		Path:      filepath.Join(root, "clone2"),
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety2"),
+	}
+	publishCloneForTest(t, repoNormal, ctx, remote, "main")
+
+	// If branch validation itself fails due to canceled/timed out context, it returns the context error.
+	if err := repoNormal.ValidateBranch(timeoutCtx, "main"); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ValidateBranch(timeout) = %v, want context.DeadlineExceeded", err)
+	}
+
+	// RemoteBranchExists with valid branch but timeout on network ls-remote
+	_, err = repoNormal.RemoteBranchExists(timeoutCtx, "main")
+	if err == nil {
+		t.Fatal("RemoteBranchExists() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RemoteBranchExists() error = %v, want context.DeadlineExceeded", err)
 	}
 }

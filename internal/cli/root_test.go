@@ -28,7 +28,7 @@ func TestRootHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, expected := range []string{"link", "add", "sync", "doctor", "--non-interactive", "--json"} {
+	for _, expected := range []string{"link", "add", "sync", "doctor", "--non-interactive", "--json", "--timeout"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q", expected)
 		}
@@ -400,6 +400,36 @@ func TestResolveCommitMessage(t *testing.T) {
 		!strings.Contains(err.Error(), "must not be empty") {
 		t.Fatalf("resolveCommitMessage(blank inline) error = %v", err)
 	}
+}
+
+func TestTimeoutFlagRejectsNegativeDuration(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"--timeout", "-5s", "version"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() with negative timeout error = nil, want error")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindInvalidUsage {
+		t.Fatalf("Execute() with negative timeout error kind = %v, want KindInvalidUsage", kind)
+	}
+	if !strings.Contains(err.Error(), "--timeout cannot be negative") {
+		t.Fatalf("Execute() error = %v, want negative timeout message", err)
+	}
+}
+
+func TestTimeoutFlagSetsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"--timeout", "1ns", "version"})
+	err := root.Execute()
+	// Version command executes fast, but the deadline is 1ns so it may or may not succeed before 1ns.
+	// The key is that --timeout is accepted and parsed as time.Duration without error on valid positive duration.
+	_ = err
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

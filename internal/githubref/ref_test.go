@@ -2,8 +2,10 @@ package githubref
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/provider"
@@ -102,5 +104,21 @@ func TestProbePublic(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ProbePublic(canceled) error = nil, want context error")
+	}
+
+	// Timed out context
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer timeoutCancel()
+	_, err = (Provider{}).ProbePublic(timeoutCtx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: "file://" + dir + "/public.git",
+	})
+	if err == nil {
+		t.Fatal("ProbePublic(timeout) error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ProbePublic(timeout) error = %v, want context.DeadlineExceeded", err)
 	}
 }

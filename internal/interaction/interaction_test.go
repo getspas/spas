@@ -209,3 +209,58 @@ func TestDetectIsNonInteractiveForNonTerminalStreams(t *testing.T) {
 		t.Fatal("Detect() marked ordinary streams interactive")
 	}
 }
+
+type mockDeadlinerReader struct {
+	readCh    chan struct{}
+	deadlined chan struct{}
+}
+
+func (m *mockDeadlinerReader) Read(p []byte) (int, error) {
+	close(m.readCh)
+	<-m.deadlined
+	return 0, errors.New("read deadline exceeded")
+}
+
+func (m *mockDeadlinerReader) SetReadDeadline(t time.Time) error {
+	select {
+	case <-m.deadlined:
+	default:
+		close(m.deadlined)
+	}
+	return nil
+}
+
+func TestReadLineContextUnblocksDeadlinerOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	reader := &mockDeadlinerReader{
+		readCh:    make(chan struct{}),
+		deadlined: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := readLineContext(ctx, reader)
+		errCh <- err
+	}()
+
+	<-reader.readCh
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("readLineContext() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readLineContext() did not return after cancellation")
+	}
+
+	select {
+	case <-reader.deadlined:
+	default:
+		t.Fatal("expected deadliner.SetReadDeadline to be called on cancellation")
+	}
+}

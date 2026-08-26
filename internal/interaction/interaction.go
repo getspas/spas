@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -132,6 +133,15 @@ func readLineContext(ctx context.Context, reader io.Reader) (string, error) {
 	case result := <-results:
 		return result.value, result.err
 	case <-ctx.Done():
+		if deadliner, ok := reader.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = deadliner.SetReadDeadline(time.Now())
+		} else if pipeCloser, ok := reader.(interface{ CloseWithError(error) error }); ok {
+			_ = pipeCloser.CloseWithError(context.Cause(ctx))
+		} else if closer, ok := reader.(io.Closer); ok {
+			if file, isFile := reader.(*os.File); !isFile || (file != os.Stdin && file != os.Stdout && file != os.Stderr) {
+				_ = closer.Close()
+			}
+		}
 		return "", context.Cause(ctx)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/getspas/spas/internal/limits"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -102,6 +103,9 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve path %q: %w", value, err)
 	}
+	if len(absolute) >= limits.MaxWindowsPathLength {
+		return "", "", fmt.Errorf("total path length of %q (%d characters) exceeds the cross-platform limit of %d characters", absolute, len(absolute), limits.MaxWindowsPathLength)
+	}
 
 	relative, err := filepath.Rel(publicRoot, absolute)
 	if err != nil {
@@ -114,6 +118,14 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	return path, absolute, nil
 }
 
+func ValidatePathLength(root string, path Path) error {
+	full := path.OSPath(root)
+	if len(full) >= limits.MaxWindowsPathLength {
+		return fmt.Errorf("total path length of %q (%d characters) exceeds the cross-platform limit of %d characters", full, len(full), limits.MaxWindowsPathLength)
+	}
+	return nil
+}
+
 func validateComponent(value string) error {
 	if value == "" || value == "." || value == ".." {
 		return fmt.Errorf("empty or traversal component")
@@ -123,8 +135,8 @@ func validateComponent(value string) error {
 	// while Windows limits one component to 255 Unicode characters. A 255-byte
 	// UTF-8 ceiling is the conservative common denominator: it also bounds the
 	// Unicode character count because every character occupies at least one byte.
-	if len(value) > 255 {
-		return fmt.Errorf("component exceeds the cross-platform 255-byte filename limit")
+	if len(value) > limits.MaxPathComponentBytes {
+		return fmt.Errorf("component exceeds the cross-platform %d-byte filename limit", limits.MaxPathComponentBytes)
 	}
 	if strings.HasSuffix(value, " ") || strings.HasSuffix(value, ".") {
 		return fmt.Errorf("component has a trailing space or period")

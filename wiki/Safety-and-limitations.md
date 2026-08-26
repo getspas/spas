@@ -46,7 +46,7 @@ Please review these operational boundaries before integrating SPAS into your wor
 - **Submodules & LFS Pointers:** Git submodules and Git LFS pointer files are not supported.
 - **Special Git Files:** `.gitignore`, `.gitattributes`, and `.gitmodules` cannot be managed by SPAS.
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
-- **Non-Portable Filenames:** Files with case-collision risks across Windows, macOS, and Linux are rejected.
+- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes, total absolute path lengths reaching or exceeding 260 characters (Windows `MAX_PATH`), and files with case-collision risks across Windows, macOS, and Linux are rejected.
 
 ---
 

@@ -131,3 +131,35 @@ func TestParseAllowsComponentAtPortableASCIILimit(t *testing.T) {
 		t.Fatalf("Parse() = %q, want %q", path, value)
 	}
 }
+
+func TestResolveRejectsTotalPathLengthExceedingWindowsLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// Build relative path components that push the total absolute path length >= 260.
+	// Note each component is <= 255 bytes, but total length exceeds 260.
+	comp := strings.Repeat("a", 100)
+	rel := filepath.Join(comp, comp, comp)
+	_, _, err := Resolve(root, root, rel)
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want total path length error")
+	}
+	if !strings.Contains(err.Error(), "exceeds the cross-platform limit") {
+		t.Fatalf("Resolve() error = %v, want cross-platform limit error", err)
+	}
+}
+
+func TestValidatePathLength(t *testing.T) {
+	t.Parallel()
+
+	root := "/short/root"
+	shortPath := Path("a/b/c.txt")
+	if err := ValidatePathLength(root, shortPath); err != nil {
+		t.Fatalf("ValidatePathLength(short) = %v, want nil", err)
+	}
+
+	longPath := Path(strings.Repeat("a/", 130) + "file.txt")
+	if err := ValidatePathLength(root, longPath); err == nil {
+		t.Fatal("ValidatePathLength(long) error = nil, want limit error")
+	}
+}

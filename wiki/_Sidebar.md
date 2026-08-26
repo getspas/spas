@@ -4,6 +4,7 @@
 - [Installation](Installation)
 - [Quick Start](Quick-start)
 - [Command Reference](Command-reference)
+- [JSON Output Schema](JSON-output-schema)
 - [Troubleshooting](Troubleshooting)
 - [Safety & Limitations](Safety-and-limitations)
 

@@ -187,10 +187,11 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 }
 
 type DoctorResult struct {
-	Healthy  bool          `json:"healthy"`
-	Checks   []DoctorCheck `json:"checks"`
-	Warnings int           `json:"warnings"`
-	Errors   int           `json:"errors"`
+	SchemaVersion int           `json:"schemaVersion"`
+	Healthy       bool          `json:"healthy"`
+	Checks        []DoctorCheck `json:"checks"`
+	Warnings      int           `json:"warnings"`
+	Errors        int           `json:"errors"`
 }
 
 type DoctorCheck struct {
@@ -200,7 +201,7 @@ type DoctorCheck struct {
 }
 
 func (a App) Doctor(ctx context.Context) error {
-	result := DoctorResult{Healthy: true}
+	result := DoctorResult{SchemaVersion: JSONSchemaVersion, Healthy: true}
 	add := func(name, status, message string) {
 		result.Checks = append(result.Checks, DoctorCheck{Name: name, Status: status, Message: message})
 		switch status {

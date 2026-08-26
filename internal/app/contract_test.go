@@ -436,7 +436,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v\n%s", err, output.String())
 	}
-	if !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
+	if status.SchemaVersion != JSONSchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
 		t.Fatalf("Status() = %#v", status)
 	}
 	if !reflect.DeepEqual(status.WorkspaceModified, []string{"docs/ARCHITECTURE.md"}) ||
@@ -458,10 +458,14 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 		t.Fatalf("Diff() error = %v", err)
 	}
 	var diff struct {
-		ChangedPaths []string `json:"changedPaths"`
+		SchemaVersion int      `json:"schemaVersion"`
+		ChangedPaths  []string `json:"changedPaths"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &diff); err != nil {
 		t.Fatalf("decode diff: %v\n%s", err, output.String())
+	}
+	if diff.SchemaVersion != JSONSchemaVersion {
+		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, JSONSchemaVersion)
 	}
 	if !reflect.DeepEqual(diff.ChangedPaths, []string{"docs/ARCHITECTURE.md"}) {
 		t.Fatalf("Diff() changed paths = %v", diff.ChangedPaths)
@@ -475,7 +479,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if !doctor.Healthy || doctor.Errors != 0 {
+	if doctor.SchemaVersion != JSONSchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
 		t.Fatalf("Doctor() = %#v", doctor)
 	}
 

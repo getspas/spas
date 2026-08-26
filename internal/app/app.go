@@ -30,6 +30,8 @@ import (
 
 var removePrivateClone = os.RemoveAll
 
+const JSONSchemaVersion = 1
+
 type App struct {
 	Git      gitexec.Runner
 	Store    linkstate.Store
@@ -586,6 +588,7 @@ type StatusOptions struct {
 }
 
 type Status struct {
+	SchemaVersion       int                 `json:"schemaVersion"`
 	Linked              bool                `json:"linked"`
 	LinkID              string              `json:"linkId"`
 	PublicWorkspace     string              `json:"publicWorkspace,omitempty"`
@@ -626,6 +629,7 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 		return err
 	}
 	status := Status{
+		SchemaVersion:      JSONSchemaVersion,
 		Linked:             true,
 		LinkID:             state.LinkID,
 		PublicBranch:       branch,
@@ -1070,6 +1074,9 @@ func (a App) expandPaths(root string, values []string) ([]pathmodel.Path, error)
 			if err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
+			if err := pathmodel.ValidatePathLength(root, managed); err != nil {
+				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
 			if err := privategit.ValidateManagedPath(managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
@@ -1245,6 +1252,11 @@ func (a App) warnf(format string, arguments ...any) error {
 
 func (a App) write(value any) error {
 	if a.JSON {
+		if typed, ok := value.(map[string]any); ok {
+			if _, exists := typed["schemaVersion"]; !exists {
+				typed["schemaVersion"] = JSONSchemaVersion
+			}
+		}
 		encoder := json.NewEncoder(a.Out)
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(value)

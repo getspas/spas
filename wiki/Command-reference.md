@@ -280,12 +280,15 @@ spas version
 
 ---
 
-## Exit Codes & Errors
+## Exit Codes, JSON Schemas & Errors
 
-When using `--json`, errors are returned as structured JSON objects:
+When using `--json`, all responses (including errors) adhere to the versioned [JSON Output Schema](JSON-output-schema).
+
+Errors are returned as structured JSON objects with `schemaVersion`:
 
 ```json
 {
+  "schemaVersion": 1,
   "ok": false,
   "error": {
     "code": "decision_required",

@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	Version = "0.1.1"
+	Version = "dev"
 	Commit  = "unknown"
 	Date    = "unknown"
 )
@@ -27,7 +27,7 @@ func applyBuildInfo(info *debug.BuildInfo) {
 	if info == nil {
 		return
 	}
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if Version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		Version = strings.TrimPrefix(info.Main.Version, "v")
 	}
 	var rev, date, dirty string

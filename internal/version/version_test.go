@@ -15,7 +15,7 @@ func TestApplyBuildInfo(t *testing.T) {
 		Date = origDate
 	}()
 
-	Version = "0.1.1"
+	Version = "dev"
 	Commit = "unknown"
 	Date = "unknown"
 
@@ -53,9 +53,46 @@ func TestApplyBuildInfoPreservesExistingValues(t *testing.T) {
 		Date = origDate
 	}()
 
-	Version = "custom-version"
+	Version = "0.2.0-SNAPSHOT-abc"
 	Commit = "custom-commit"
 	Date = "custom-date"
+
+	info := &debug.BuildInfo{
+		Main: debug.Module{
+			Version: "v1.2.3",
+		},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "newrevision"},
+			{Key: "vcs.time", Value: "newtime"},
+		},
+	}
+
+	applyBuildInfo(info)
+
+	if Version != "0.2.0-SNAPSHOT-abc" {
+		t.Errorf("Version = %q, want 0.2.0-SNAPSHOT-abc", Version)
+	}
+	if Commit != "custom-commit" {
+		t.Errorf("Commit = %q, want custom-commit", Commit)
+	}
+	if Date != "custom-date" {
+		t.Errorf("Date = %q, want custom-date", Date)
+	}
+}
+
+func TestApplyBuildInfoDevelLeavesDev(t *testing.T) {
+	origVersion := Version
+	origCommit := Commit
+	origDate := Date
+	defer func() {
+		Version = origVersion
+		Commit = origCommit
+		Date = origDate
+	}()
+
+	Version = "dev"
+	Commit = "unknown"
+	Date = "unknown"
 
 	info := &debug.BuildInfo{
 		Main: debug.Module{
@@ -69,13 +106,61 @@ func TestApplyBuildInfoPreservesExistingValues(t *testing.T) {
 
 	applyBuildInfo(info)
 
-	if Version != "custom-version" {
-		t.Errorf("Version = %q, want custom-version", Version)
+	if Version != "dev" {
+		t.Errorf("Version = %q, want dev", Version)
 	}
-	if Commit != "custom-commit" {
-		t.Errorf("Commit = %q, want custom-commit", Commit)
+	if Commit != "newrevision" {
+		t.Errorf("Commit = %q, want newrevision", Commit)
 	}
-	if Date != "custom-date" {
-		t.Errorf("Date = %q, want custom-date", Date)
+	if Date != "newtime" {
+		t.Errorf("Date = %q, want newtime", Date)
+	}
+}
+
+func TestApplyBuildInfoEmptyMainVersionLeavesDev(t *testing.T) {
+	origVersion := Version
+	origCommit := Commit
+	origDate := Date
+	defer func() {
+		Version = origVersion
+		Commit = origCommit
+		Date = origDate
+	}()
+
+	Version = "dev"
+	Commit = "unknown"
+	Date = "unknown"
+
+	info := &debug.BuildInfo{
+		Main: debug.Module{
+			Version: "",
+		},
+	}
+
+	applyBuildInfo(info)
+
+	if Version != "dev" {
+		t.Errorf("Version = %q, want dev", Version)
+	}
+}
+
+func TestApplyBuildInfoNilInfo(t *testing.T) {
+	origVersion := Version
+	origCommit := Commit
+	origDate := Date
+	defer func() {
+		Version = origVersion
+		Commit = origCommit
+		Date = origDate
+	}()
+
+	Version = "dev"
+	Commit = "unknown"
+	Date = "unknown"
+
+	applyBuildInfo(nil)
+
+	if Version != "dev" || Commit != "unknown" || Date != "unknown" {
+		t.Errorf("got (%q, %q, %q), want (dev, unknown, unknown)", Version, Commit, Date)
 	}
 }

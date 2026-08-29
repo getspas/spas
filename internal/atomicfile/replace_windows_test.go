@@ -38,13 +38,8 @@ func TestIsRetryable(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "syscall ERROR_SHARING_VIOLATION",
-			err:  syscall.Errno(32),
-			want: true,
-		},
-		{
 			name: "syscall ERROR_ACCESS_DENIED",
-			err:  syscall.Errno(5),
+			err:  syscall.ERROR_ACCESS_DENIED,
 			want: true,
 		},
 		{
@@ -54,7 +49,7 @@ func TestIsRetryable(t *testing.T) {
 		},
 		{
 			name: "wrapped syscall access denied",
-			err:  fmt.Errorf("wrap: %w", syscall.Errno(5)),
+			err:  fmt.Errorf("wrap: %w", syscall.ERROR_ACCESS_DENIED),
 			want: true,
 		},
 		{

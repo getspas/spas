@@ -883,8 +883,8 @@ func ValidateBranchName(ctx context.Context, git gitexec.Runner, workingDirector
 	}
 	result, err := git.Run(ctx, workingDirectory, "check-ref-format", "--branch", branch)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		return fmt.Errorf("invalid private branch %q", branch)
 	}

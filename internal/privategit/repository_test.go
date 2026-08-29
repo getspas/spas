@@ -472,6 +472,19 @@ func TestValidateBranchNameRejectsPreviousCheckoutExpression(t *testing.T) {
 		t.Fatal("ValidateBranchName(@{-1}) error = nil, want previous-checkout expression rejection")
 	}
 }
+func TestValidateBranchNameCancellation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := ValidateBranchName(canceledCtx, gitexec.Runner{}, root, "main")
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateBranchName(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
 
 func TestHeadRejectsNonCommitRef(t *testing.T) {
 	t.Parallel()

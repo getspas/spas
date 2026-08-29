@@ -2,7 +2,6 @@ package githubref
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -117,11 +116,8 @@ func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provide
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, ctxErr
-		}
-		return false, err
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 	return false, nil
 }

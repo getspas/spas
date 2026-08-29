@@ -4,7 +4,6 @@ package atomicfile
 
 import (
 	"errors"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -21,18 +20,7 @@ var replaceRetryDelays = [...]time.Duration{
 var moveFileEx = windows.MoveFileEx
 
 func isRetryable(err error) bool {
-	if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-		return true
-	}
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		return errno == 32 || errno == 5
-	}
-	var winErrno windows.Errno
-	if errors.As(err, &winErrno) {
-		return winErrno == windows.ERROR_SHARING_VIOLATION || winErrno == windows.ERROR_ACCESS_DENIED
-	}
-	return false
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)
 }
 
 func replace(source, destination string) error {

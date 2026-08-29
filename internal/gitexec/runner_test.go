@@ -333,12 +333,13 @@ func TestRunnerTimeoutKillsSubprocess(t *testing.T) {
 	t.Setenv("SPAS_GITEXEC_HELPER", "sleep")
 
 	runner := Runner{
-		Path:    os.Args[0],
-		Timeout: 50 * time.Millisecond,
+		Path: os.Args[0],
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	started := time.Now()
 	_, err := runner.Run(
-		context.Background(),
+		ctx,
 		t.TempDir(),
 		"-test.run=^TestGitExecHelperProcess$",
 	)
@@ -362,12 +363,13 @@ func TestRunnerStreamingTimeoutKillsSubprocess(t *testing.T) {
 
 	var streamed bytes.Buffer
 	runner := Runner{
-		Path:    os.Args[0],
-		Stdout:  &streamed,
-		Timeout: 50 * time.Millisecond,
+		Path:   os.Args[0],
+		Stdout: &streamed,
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	_, err := runner.RunStreaming(
-		context.Background(),
+		ctx,
 		t.TempDir(),
 		"-test.run=^TestGitExecHelperProcess$",
 	)
@@ -383,11 +385,12 @@ func TestRunnerInputTimeoutKillsSubprocess(t *testing.T) {
 	t.Setenv("SPAS_GITEXEC_HELPER", "sleep")
 
 	runner := Runner{
-		Path:    os.Args[0],
-		Timeout: 50 * time.Millisecond,
+		Path: os.Args[0],
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	_, err := runner.RunInput(
-		context.Background(),
+		ctx,
 		t.TempDir(),
 		strings.NewReader("sample"),
 		"-test.run=^TestGitExecHelperProcess$",
@@ -403,8 +406,10 @@ func TestRunnerInputTimeoutKillsSubprocess(t *testing.T) {
 func TestRunnerSucceedsWithinTimeout(t *testing.T) {
 	t.Parallel()
 
-	runner := Runner{Timeout: 10 * time.Second}
-	result, err := runner.Run(context.Background(), t.TempDir(), "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runner := Runner{}
+	result, err := runner.Run(ctx, t.TempDir(), "--version")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

@@ -41,12 +41,16 @@ func Execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	root := NewRootContext(ctx, os.Stdin, os.Stdout, os.Stderr)
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
+	if options != nil && options.cancel != nil {
+		options.cancel()
+	}
+	if err != nil {
 		if ctx.Err() != nil {
 			err = spaserr.Wrap(spaserr.KindInterrupted, fmt.Errorf("interrupted: %w", err))
 		}
 		err = classifyExecutionError(err)
-		options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
 		jsonMode := options != nil && options.json
 		if !jsonMode {
 			jsonMode = jsonRequested(os.Args[1:])
@@ -139,11 +143,6 @@ commit in the project repository.`,
 				gitPath,
 			)
 			return err
-		},
-		PersistentPostRun: func(command *cobra.Command, _ []string) {
-			if options.cancel != nil {
-				options.cancel()
-			}
 		},
 	}
 	root.SetContext(ctx)
@@ -672,7 +671,6 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 		// deterministically instead of hanging while the link lock is held.
 		NonInteractive: !prompt.Interactive,
 		Stdin:          command.InOrStdin(),
-		Timeout:        options.timeout,
 	}
 	if !options.json {
 		git.Stdout = command.OutOrStdout()

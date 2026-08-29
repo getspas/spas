@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/app"
 	"github.com/getspas/spas/internal/interaction"
@@ -339,6 +340,8 @@ func TestExitAndErrorCodes(t *testing.T) {
 		errorKey string
 	}{
 		{err: errors.New("operation"), exit: 1, errorKey: "operation_failed"},
+		{err: context.DeadlineExceeded, exit: 1, errorKey: "operation_failed"},
+		{err: context.Canceled, exit: 1, errorKey: "operation_failed"},
 		{err: spaserr.Wrap(spaserr.KindInvalidUsage, errors.New("usage")), exit: 2, errorKey: "invalid_usage"},
 		{err: linkstate.ErrNotLinked, exit: 3, errorKey: "not_linked"},
 		{err: interaction.ErrDecisionRequired, exit: 4, errorKey: "decision_required"},
@@ -439,11 +442,56 @@ func TestTimeoutFlagSetsContextDeadline(t *testing.T) {
 
 	var output bytes.Buffer
 	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
-	root.SetArgs([]string{"--timeout", "1ns", "version"})
+	var observedDeadline time.Time
+	var deadlineSet bool
+	testCmd := &cobra.Command{
+		Use: "test-timeout",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			observedDeadline, deadlineSet = cmd.Context().Deadline()
+			return nil
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"--timeout", "5s", "test-timeout"})
+	before := time.Now()
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !deadlineSet {
+		t.Fatal("command context has no deadline set")
+	}
+	if observedDeadline.Before(before) || observedDeadline.After(before.Add(6*time.Second)) {
+		t.Fatalf("observed deadline = %v, want within [now, now+5s]", observedDeadline)
+	}
+}
+
+func TestTimeoutFlagExpiredDeadlineSurfacesOperationFailed(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	testCmd := &cobra.Command{
+		Use: "test-timeout-expire",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			<-cmd.Context().Done()
+			return cmd.Context().Err()
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"--timeout", "10ms", "test-timeout-expire"})
 	err := root.Execute()
-	// Version command executes fast, but the deadline is 1ns so it may or may not succeed before 1ns.
-	// The key is that --timeout is accepted and parsed as time.Duration without error on valid positive duration.
-	_ = err
+	if err == nil {
+		t.Fatal("Execute() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Execute() error = %v, want context.DeadlineExceeded", err)
+	}
+	if got := exitCode(err); got != 1 {
+		t.Fatalf("exitCode(err) = %d, want 1", got)
+	}
+	if got := errorCode(err); got != "operation_failed" {
+		t.Fatalf("errorCode(err) = %q, want operation_failed", got)
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

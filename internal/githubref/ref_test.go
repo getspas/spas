@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -124,5 +125,42 @@ func TestProbePublic(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("ProbePublic(timeout) error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestProbePublicIgnoresLocalGitConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	git := gitexec.Runner{}
+
+	dir := t.TempDir()
+	bareDir := filepath.Join(dir, "public.git")
+	cmd := exec.Command("git", "init", "--bare", "-q", bareDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	localRepo := filepath.Join(dir, "localrepo")
+	cmd = exec.Command("git", "init", "-q", localRepo)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	targetURL := "file://" + filepath.ToSlash(bareDir)
+	// Configure local repo to rewrite the target URL to a nonexistent path.
+	cmd = exec.Command("git", "-C", localRepo, "config", "url.file:///nonexistent-path-12345/.insteadOf", targetURL)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// ProbePublic should run in a neutral directory outside localrepo and ignore its local config.
+	isPublic, err := (Provider{}).ProbePublic(ctx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: targetURL,
+	})
+	if err != nil || !isPublic {
+		t.Fatalf("ProbePublic(local repo config rewrite) = %v, %v, want true, nil", isPublic, err)
 	}
 }

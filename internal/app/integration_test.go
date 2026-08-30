@@ -1291,8 +1291,9 @@ func testApp(t *testing.T, publicRoot, root, remote string) (App, *bytes.Buffer)
 }
 
 type testRepositoryProvider struct {
-	remoteURL string
-	isPublic  bool
+	remoteURL  string
+	isPublic   bool
+	probeCalls *int
 }
 
 func (testRepositoryProvider) ID() provider.ID { return githubref.ID }
@@ -1307,6 +1308,9 @@ func (p testRepositoryProvider) Resolve(request provider.RepositoryRequest) (pro
 }
 
 func (p testRepositoryProvider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provider.RepositoryRef) (bool, error) {
+	if p.probeCalls != nil {
+		*p.probeCalls++
+	}
 	if p.isPublic {
 		return true, nil
 	}

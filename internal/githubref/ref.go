@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -114,7 +115,7 @@ func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provide
 	}
 	probeGit := git
 	probeGit.NonInteractive = true
-	_, err := probeGit.Run(ctx, ".", "-c", "credential.helper=", "ls-remote", url)
+	_, err := probeGit.Run(ctx, os.TempDir(), "-c", "credential.helper=", "ls-remote", url)
 	if err == nil {
 		return true, nil
 	}

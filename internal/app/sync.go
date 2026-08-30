@@ -129,29 +129,40 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		return err
 	}
 
-	if !options.AllowPublic && a.Provider != nil {
-		ref := provider.RepositoryRef{
-			Provider:  state.Private.Provider,
-			Canonical: state.Private.Repository,
-			Transport: state.Private.Transport,
-			RemoteURL: state.Private.RemoteURL,
-		}
-		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
-		if probeErr != nil {
-			return probeErr
-		}
-		if isPublic {
-			approved, err := a.Prompt.Confirm(
-				ctx,
-				fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
-				false,
-				false,
-			)
-			if err != nil {
+	if !state.Private.PublicApproved && a.Provider != nil {
+		if options.AllowPublic {
+			state.Private.PublicApproved = true
+			if err := a.Store.Save(state); err != nil {
 				return err
 			}
-			if !approved {
-				return fmt.Errorf("syncing to publicly readable repository declined")
+		} else {
+			ref := provider.RepositoryRef{
+				Provider:  state.Private.Provider,
+				Canonical: state.Private.Repository,
+				Transport: state.Private.Transport,
+				RemoteURL: state.Private.RemoteURL,
+			}
+			isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
+			if probeErr != nil {
+				return probeErr
+			}
+			if isPublic {
+				approved, err := a.Prompt.Confirm(
+					ctx,
+					fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
+					false,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				if !approved {
+					return fmt.Errorf("syncing to publicly readable repository declined")
+				}
+				state.Private.PublicApproved = true
+				if err := a.Store.Save(state); err != nil {
+					return err
+				}
 			}
 		}
 	}

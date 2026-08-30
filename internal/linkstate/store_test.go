@@ -84,6 +84,35 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
+func TestSaveLoadPublicApproved(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := Store{
+		ConfigDir: filepath.Join(root, "config"),
+		DataDir:   filepath.Join(root, "data"),
+	}
+	state := New(
+		filepath.Join(root, "public"),
+		filepath.Join(root, "public", ".git"),
+		testRepositoryRef(),
+		"main",
+		store,
+	)
+	state.Private.PublicApproved = true
+
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := store.Load(state.Public.Root, state.Public.GitCommonDir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !got.Private.PublicApproved {
+		t.Fatalf("Load().Private.PublicApproved = false, want true")
+	}
+}
+
 func TestSaveLoadAcceptsAbortOnlyMergeRecovery(t *testing.T) {
 	t.Parallel()
 

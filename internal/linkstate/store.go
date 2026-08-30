@@ -62,6 +62,7 @@ type Private struct {
 	ExpectedHead        string               `json:"expectedHead,omitempty"`
 	Initialization      *CloneInitialization `json:"initialization,omitempty"`
 	RemoteEmpty         bool                 `json:"remoteEmpty,omitempty"`
+	PublicApproved      bool                 `json:"publicApproved,omitempty"`
 }
 
 type CloneInitialization struct {

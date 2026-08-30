@@ -96,11 +96,14 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			return err
 		}
 	}
+	publicApproved := false
+	probed := false
 	if !options.AllowPublic && !options.DryRun {
 		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
 		if probeErr != nil {
 			return probeErr
 		}
+		probed = true
 		if isPublic {
 			approved, err := a.Prompt.Confirm(
 				ctx,
@@ -114,9 +117,13 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			if !approved {
 				return fmt.Errorf("linking publicly readable repository declined")
 			}
+			publicApproved = true
 		}
+	} else if options.AllowPublic {
+		publicApproved = true
 	}
 	state := linkstate.New(repository.Root, repository.CommonDir, ref, options.Branch, a.Store)
+	state.Private.PublicApproved = publicApproved
 	if !options.DryRun {
 		linkLock, err := lock.Acquire(filepath.Join(a.Store.DataDir, "locks"), state.LinkID)
 		if err != nil {
@@ -173,7 +180,7 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 		"linked":            true,
 		"publicWorkspace":   state.Public.Root,
 		"privateRepository": state.Private.Repository,
-		"networkAccess":     false,
+		"networkAccess":     probed,
 	})
 }
 

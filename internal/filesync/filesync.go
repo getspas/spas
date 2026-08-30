@@ -60,9 +60,17 @@ func Executable(path string) (bool, error) {
 // CopyManaged copies one repository-relative regular file between two roots.
 // os.Root constrains all source and destination operations to those roots, and
 // the explicit component checks reject symbolic-link indirection even when a
-// link would remain inside the root.
+// link would remain inside the root. The destination inherits Git checkout
+// permission semantics: maximal modes filtered by the process umask.
 func CopyManaged(sourceRoot string, source pathmodel.Path, destinationRoot string, destination pathmodel.Path) error {
-	return copyManaged(sourceRoot, source, destinationRoot, destination, nil)
+	return copyManaged(sourceRoot, source, destinationRoot, destination, nil, false)
+}
+
+// CopyManagedOwnerOnly copies like CopyManaged but keeps the destination
+// owner-private. Recovery copies under the SPAS data directory use it; they
+// hold private workspace bytes and never widen beyond the owner.
+func CopyManagedOwnerOnly(sourceRoot string, source pathmodel.Path, destinationRoot string, destination pathmodel.Path) error {
+	return copyManaged(sourceRoot, source, destinationRoot, destination, nil, true)
 }
 
 // ExpectedSnapshot binds a managed workspace mutation to the bytes, existence,
@@ -83,7 +91,7 @@ func CopyManagedIfUnchanged(
 	destination pathmodel.Path,
 	expected ExpectedSnapshot,
 ) error {
-	return copyManaged(sourceRoot, source, destinationRoot, destination, &expected)
+	return copyManaged(sourceRoot, source, destinationRoot, destination, &expected, false)
 }
 
 func copyManaged(
@@ -92,6 +100,7 @@ func copyManaged(
 	destinationRoot string,
 	destination pathmodel.Path,
 	expected *ExpectedSnapshot,
+	ownerOnly bool,
 ) error {
 	inputRoot, err := os.OpenRoot(sourceRoot)
 	if err != nil {
@@ -116,12 +125,16 @@ func copyManaged(
 		return fmt.Errorf("open destination root: %w", err)
 	}
 	defer outputRoot.Close()
+	parentMode := os.FileMode(0o777)
+	if ownerOnly {
+		parentMode = 0o700
+	}
 	parent := filepath.Dir(filepath.FromSlash(destination.String()))
 	if parent != "." {
 		if err := validateExistingParents(outputRoot, destination); err != nil {
 			return err
 		}
-		if err := outputRoot.MkdirAll(parent, 0o700); err != nil {
+		if err := outputRoot.MkdirAll(parent, parentMode); err != nil {
 			return fmt.Errorf("create destination parent for %q: %w", destination, err)
 		}
 	}
@@ -138,14 +151,24 @@ func copyManaged(
 		return err
 	}
 	tempName := filepath.Join(ManagedTempDirectory, tempBase)
-	temp, err := outputRoot.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Checkout-policy copies receive their final mode at creation so the
+	// process umask filters it, exactly as git checkout does; a chmod would
+	// bypass the umask. Owner-only copies start private and add back the
+	// executable bit afterward.
+	createMode := checkoutPermissions(sourceInfo.Mode())
+	if ownerOnly {
+		createMode = 0o600
+	}
+	temp, err := outputRoot.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, createMode)
 	if err != nil {
 		return fmt.Errorf("create temporary destination for %q: %w", destination, err)
 	}
 	defer outputRoot.Remove(tempName)
-	if err := temp.Chmod(copyPermissions(sourceInfo.Mode())); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("apply mode to %q: %w", destination, err)
+	if ownerOnly {
+		if err := temp.Chmod(ownerOnlyPermissions(sourceInfo.Mode())); err != nil {
+			_ = temp.Close()
+			return fmt.Errorf("apply mode to %q: %w", destination, err)
+		}
 	}
 	if _, err := io.Copy(temp, input); err != nil {
 		_ = temp.Close()
@@ -414,13 +437,22 @@ func validateRootPath(root *os.Root, path pathmodel.Path, requireRegular bool) e
 	return nil
 }
 
-// copyPermissions keeps managed copies owner-private while preserving the
-// source's executable bit, so scripts survive the round trip through the
-// private clone.
-func copyPermissions(sourceMode os.FileMode) os.FileMode {
-	mode := os.FileMode(0o600)
+// checkoutPermissions mirrors Git's checkout policy: files are created with
+// the maximal mode and the process umask decides group/other access.
+func checkoutPermissions(sourceMode os.FileMode) os.FileMode {
 	// Git records a single executable/non-executable distinction. Preserve it
 	// even when the source's only executable bit is group or other.
+	if sourceMode.Perm()&0o111 != 0 {
+		return 0o777
+	}
+	return 0o666
+}
+
+// ownerOnlyPermissions keeps recovery copies owner-private while preserving
+// the source's executable bit, so scripts survive the round trip through the
+// private clone.
+func ownerOnlyPermissions(sourceMode os.FileMode) os.FileMode {
+	mode := os.FileMode(0o600)
 	if sourceMode.Perm()&0o111 != 0 {
 		mode |= 0o100
 	}

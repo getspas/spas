@@ -812,6 +812,128 @@ func TestExecutableBitSurvivesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMaterializePermissionsInheritCheckoutPolicy(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+
+	controlRoot := t.TempDir()
+	control := func(name string, mode os.FileMode) os.FileMode {
+		t.Helper()
+		file, err := os.OpenFile(filepath.Join(controlRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := file.Stat()
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Mode().Perm()
+	}
+	wantPlain := control("plain", 0o666)
+	wantExec := control("tool", 0o777)
+	if err := os.Mkdir(filepath.Join(controlRoot, "dir"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, err := os.Stat(filepath.Join(controlRoot, "dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := dirInfo.Mode().Perm()
+
+	ctx := context.Background()
+	instance, publicRoot, root, remote := fixture(t)
+
+	// Teammate commits a plain file and an executable script into subdirectories.
+	clone := filepath.Join(root, "teammate-clone")
+	_ = os.RemoveAll(clone)
+	runGit(t, root, "clone", "-q", remote, clone)
+	runGit(t, clone, "config", "user.name", "Teammate")
+	runGit(t, clone, "config", "user.email", "teammate@example.invalid")
+	if remoteHead := gitOutputAllowFail(t, clone, "rev-parse", "--verify", "-q", "refs/remotes/origin/main"); remoteHead != "" {
+		runGit(t, clone, "checkout", "-q", "-B", "main", "origin/main")
+	} else if head := gitOutputAllowFail(t, clone, "rev-parse", "--verify", "-q", "HEAD"); head == "" {
+		runGit(t, clone, "checkout", "-q", "-b", "main")
+	}
+	plainFull := filepath.Join(clone, "config", "plain.json")
+	if err := os.MkdirAll(filepath.Dir(plainFull), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plainFull, []byte("{\"k\":\"v\"}\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	execFull := filepath.Join(clone, "bin", "tool.sh")
+	if err := os.MkdirAll(filepath.Dir(execFull), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execFull, []byte("#!/bin/sh\nexit 0\n"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(execFull, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, clone, "add", "--force", "--", "config/plain.json", "bin/tool.sh")
+	runGit(t, clone, "commit", "-q", "-m", "teammate plain and exec")
+	runGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	if err := instance.Sync(ctx, syncOptions("sync remote additions")); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	// Verify workspace materialized files and directories.
+	plainInfo, err := os.Stat(filepath.Join(publicRoot, "config", "plain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plainInfo.Mode().Perm(); got != wantPlain {
+		t.Errorf("materialized plain file mode = %o, want %o", got, wantPlain)
+	}
+
+	execInfo, err := os.Stat(filepath.Join(publicRoot, "bin", "tool.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := execInfo.Mode().Perm(); got != wantExec {
+		t.Errorf("materialized exec file mode = %o, want %o", got, wantExec)
+	}
+
+	configDirInfo, err := os.Stat(filepath.Join(publicRoot, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configDirInfo.Mode().Perm(); got != wantDir {
+		t.Errorf("materialized config dir mode = %o, want %o", got, wantDir)
+	}
+
+	binDirInfo, err := os.Stat(filepath.Join(publicRoot, "bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binDirInfo.Mode().Perm(); got != wantDir {
+		t.Errorf("materialized bin dir mode = %o, want %o", got, wantDir)
+	}
+
+	// Verify SPAS data directory state files remain owner-only.
+	statePath := filepath.Join(instance.Store.DataDir, "links")
+	_ = filepath.WalkDir(statePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return nil
+		}
+		if got := info.Mode().Perm(); got&0o077 != 0 {
+			t.Errorf("SPAS data file %s mode = %o, want no group/other access", path, got)
+		}
+		return nil
+	})
+}
+
 // F6: a sync interrupted between push and materialization must finish
 // materializing before workspace state is read as local edits, so a
 // teammate's pushed change is never silently reverted.

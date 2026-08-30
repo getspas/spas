@@ -50,7 +50,7 @@ func (s Store) Save(publicRoot string, path pathmodel.Path) (bool, error) {
 	if err := os.MkdirAll(s.Root, 0o700); err != nil {
 		return false, fmt.Errorf("create recovery store: %w", err)
 	}
-	if err := filesync.CopyManaged(publicRoot, path, s.Root, path); err != nil {
+	if err := filesync.CopyManagedOwnerOnly(publicRoot, path, s.Root, path); err != nil {
 		return false, fmt.Errorf("save recovery copy of %q: %w", path, err)
 	}
 	return true, nil

@@ -935,7 +935,8 @@ func TestStageTreatsSpecialCharactersAsLiteralPaths(t *testing.T) {
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, args...); err != nil {
+	cmdArgs := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
+	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, cmdArgs...); err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
 }

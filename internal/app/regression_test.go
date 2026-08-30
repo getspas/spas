@@ -8,20 +8,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/getspas/spas/internal/filesync"
-	"github.com/getspas/spas/internal/gitexec"
-	"github.com/getspas/spas/internal/interaction"
-	"github.com/getspas/spas/internal/linkstate"
-	"github.com/getspas/spas/internal/pathmodel"
-	"github.com/getspas/spas/internal/spaserr"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/getspas/spas/internal/filesync"
+	"github.com/getspas/spas/internal/gitexec"
+	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/lock"
+	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/spaserr"
 )
 
 // fixture creates a public repository with one committed public file, a bare
@@ -3039,5 +3043,48 @@ func TestSyncTimesOutWhenGitNetworkStalls(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
 		t.Fatalf("Sync() error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestDoctorConcurrentLockProbe(t *testing.T) {
+	t.Parallel()
+
+	lockDir := filepath.Join(t.TempDir(), "locks")
+	const concurrency = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrency)
+
+	for i := range concurrency {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// Simulate distinct process PIDs for concurrent doctor probe executions
+			name := fmt.Sprintf(".doctor-probe-%d", 20000+id)
+			testLock, err := lock.Acquire(lockDir, name)
+			if err != nil {
+				errs <- fmt.Errorf("concurrent probe %d acquire failed: %w", id, err)
+				return
+			}
+			releaseErr := testLock.Release()
+			removeErr := os.Remove(filepath.Join(lockDir, name+".lock"))
+			if releaseErr != nil {
+				errs <- fmt.Errorf("concurrent probe %d release failed: %w", id, releaseErr)
+				return
+			}
+			_ = removeErr
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("unexpected error in concurrent lock probe: %v", err)
+		}
+	}
+
+	// Also verify that checkLockAcquirable runs cleanly on this lockDir
+	if err := checkLockAcquirable(lockDir); err != nil {
+		t.Fatalf("checkLockAcquirable() error = %v", err)
 	}
 }

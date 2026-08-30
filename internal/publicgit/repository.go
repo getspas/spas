@@ -21,7 +21,7 @@ type Repository struct {
 }
 
 func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository, error) {
-	if err := RequireSupportedGit(ctx, git); err != nil {
+	if _, err := RequireSupportedGit(ctx, git); err != nil {
 		return Repository{}, err
 	}
 	if hint == "" {
@@ -66,12 +66,15 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	return Repository{Root: root, GitDir: gitDir, CommonDir: common, Git: git}, nil
 }
 
-func RequireSupportedGit(ctx context.Context, git gitexec.Runner) error {
+func RequireSupportedGit(ctx context.Context, git gitexec.Runner) (string, error) {
 	result, err := git.Run(ctx, ".", "--version")
 	if err != nil {
-		return fmt.Errorf("Git 2.43.1 or newer is required: %w", err)
+		return "", fmt.Errorf("Git 2.43.1 or newer is required: %w", err)
 	}
-	return validateGitVersion(string(result.Stdout))
+	if err := validateGitVersion(string(result.Stdout)); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
 func validateGitVersion(output string) error {

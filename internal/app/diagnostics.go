@@ -213,17 +213,11 @@ func (a App) Doctor(ctx context.Context) error {
 		}
 	}
 
-	dir := a.RepoHint
-	if dir == "" {
-		dir = "."
-	}
-	version, err := a.Git.Run(ctx, dir, "--version")
+	gitVersion, err := publicgit.RequireSupportedGit(ctx, a.Git)
 	if err != nil {
 		add("git", "error", err.Error())
-	} else if reqErr := publicgit.RequireSupportedGit(ctx, a.Git); reqErr != nil {
-		add("git", "error", reqErr.Error())
 	} else {
-		add("git", "ok", strings.TrimSpace(string(version.Stdout)))
+		add("git", "ok", gitVersion)
 	}
 
 	configErr := checkDirectoryWritable(a.Store.ConfigDir)
@@ -247,6 +241,7 @@ func (a App) Doctor(ctx context.Context) error {
 
 	repository, repoErr := a.publicRepository(ctx)
 	if repoErr != nil {
+		add("workspace", "warning", fmt.Sprintf("not a Git repository — link checks skipped: %v", repoErr))
 		return a.renderDoctorResult(result)
 	}
 
@@ -262,6 +257,7 @@ func (a App) Doctor(ctx context.Context) error {
 	state, err := a.loadState(repository.Root, repository.CommonDir)
 	if err != nil {
 		if errors.Is(err, linkstate.ErrNotLinked) {
+			add("link-state", "warning", "workspace is not linked; run spas link — link checks skipped")
 			return a.renderDoctorResult(result)
 		}
 		add("link-state", "error", fmt.Sprintf("invalid link state: %v", err))
@@ -487,13 +483,14 @@ func checkDirectoryWritable(dir string) error {
 }
 
 func checkLockAcquirable(lockDir string) error {
-	testLock, err := lock.Acquire(lockDir, ".doctor-probe")
+	name := fmt.Sprintf(".doctor-probe-%d", os.Getpid())
+	testLock, err := lock.Acquire(lockDir, name)
 	if err != nil {
 		return err
 	}
 	releaseErr := testLock.Release()
-	removeErr := os.Remove(filepath.Join(lockDir, ".doctor-probe.lock"))
-	return errors.Join(releaseErr, removeErr)
+	_ = os.Remove(filepath.Join(lockDir, name+".lock"))
+	return releaseErr
 }
 
 func (a App) originConfigShape(ctx context.Context, privatePath string) (string, bool, error) {

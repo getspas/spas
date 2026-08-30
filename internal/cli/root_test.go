@@ -514,7 +514,7 @@ func TestDoctorCommandUnlinked(t *testing.T) {
 		t.Fatalf("Execute(doctor) error = %v\n%s", err, output.String())
 	}
 	text := output.String()
-	for _, expected := range []string{"git", "data-dirs", "lock", "ok"} {
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok", "workspace", "warning", "not a Git repository — link checks skipped:"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("output missing %q: %s", expected, text)
 		}
@@ -530,7 +530,17 @@ func TestDoctorCommandUnlinked(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatalf("decode doctor json: %v\n%s", err, output.String())
 	}
-	if result.SchemaVersion != app.JSONSchemaVersion || !result.Healthy || result.Errors != 0 {
-		t.Fatalf("doctor result = %#v, want healthy with schemaVersion %d", result, app.JSONSchemaVersion)
+	if result.SchemaVersion != app.JSONSchemaVersion || !result.Healthy || result.Errors != 0 || result.Warnings != 1 {
+		t.Fatalf("doctor result = %#v, want healthy with 1 warning and schemaVersion %d", result, app.JSONSchemaVersion)
+	}
+	foundWorkspaceWarning := false
+	for _, check := range result.Checks {
+		if check.Name == "workspace" && check.Status == "warning" && strings.Contains(check.Message, "not a Git repository — link checks skipped:") {
+			foundWorkspaceWarning = true
+			break
+		}
+	}
+	if !foundWorkspaceWarning {
+		t.Fatalf("doctor result checks = %#v, want workspace warning", result.Checks)
 	}
 }

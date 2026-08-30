@@ -1567,17 +1567,25 @@ func TestDoctorUnlinkedNonGitWorkspace(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if !doctor.Healthy || doctor.Errors != 0 {
-		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result", doctor)
+	if !doctor.Healthy || doctor.Errors != 0 || doctor.Warnings != 1 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result with 1 warning", doctor)
 	}
 	checks := make(map[string]string)
+	messages := make(map[string]string)
 	for _, check := range doctor.Checks {
 		checks[check.Name] = check.Status
+		messages[check.Name] = check.Message
 	}
 	for _, expected := range []string{"git", "data-dirs", "lock"} {
 		if status, ok := checks[expected]; !ok || status != "ok" {
 			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
 		}
+	}
+	if status, ok := checks["workspace"]; !ok || status != "warning" {
+		t.Fatalf("expected workspace check to be warning, got %q (found=%t)", status, ok)
+	}
+	if !strings.Contains(messages["workspace"], "not a Git repository — link checks skipped:") {
+		t.Fatalf("workspace message = %q, want link checks skipped notice", messages["workspace"])
 	}
 
 	// Test text rendering mode as well
@@ -1587,7 +1595,7 @@ func TestDoctorUnlinkedNonGitWorkspace(t *testing.T) {
 		t.Fatalf("Doctor() text error = %v\n%s", err, output.String())
 	}
 	textOutput := output.String()
-	for _, expected := range []string{"git", "data-dirs", "lock", "ok"} {
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok", "workspace", "warning", "not a Git repository — link checks skipped:"} {
 		if !strings.Contains(textOutput, expected) {
 			t.Errorf("text output missing %q: %s", expected, textOutput)
 		}
@@ -1621,16 +1629,37 @@ func TestDoctorUnlinkedGitWorkspace(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if !doctor.Healthy || doctor.Errors != 0 {
-		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result", doctor)
+	if !doctor.Healthy || doctor.Errors != 0 || doctor.Warnings != 1 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result with 1 warning", doctor)
 	}
 	checks := make(map[string]string)
+	messages := make(map[string]string)
 	for _, check := range doctor.Checks {
 		checks[check.Name] = check.Status
+		messages[check.Name] = check.Message
 	}
 	for _, expected := range []string{"git", "data-dirs", "lock", "worktrees"} {
 		if status, ok := checks[expected]; !ok || status != "ok" {
 			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
+		}
+	}
+	if status, ok := checks["link-state"]; !ok || status != "warning" {
+		t.Fatalf("expected link-state check to be warning, got %q (found=%t)", status, ok)
+	}
+	if messages["link-state"] != "workspace is not linked; run spas link — link checks skipped" {
+		t.Fatalf("link-state message = %q, want unlinked notice", messages["link-state"])
+	}
+
+	// Test text rendering mode as well
+	output.Reset()
+	instance.JSON = false
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() text error = %v\n%s", err, output.String())
+	}
+	textOutput := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "worktrees", "ok", "link-state", "warning", "workspace is not linked; run spas link — link checks skipped"} {
+		if !strings.Contains(textOutput, expected) {
+			t.Errorf("text output missing %q: %s", expected, textOutput)
 		}
 	}
 }

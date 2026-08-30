@@ -1188,6 +1188,8 @@ func initializePublicRepository(t *testing.T, root string) string {
 	runGit(t, publicRoot, "init", "-q", "-b", "main")
 	runGit(t, publicRoot, "config", "user.name", "SPAS Test")
 	runGit(t, publicRoot, "config", "user.email", "spas@example.invalid")
+	runGit(t, publicRoot, "config", "commit.gpgsign", "false")
+	runGit(t, publicRoot, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(publicRoot, "README.md"), []byte("public\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1207,6 +1209,8 @@ func initializePrivateRemoteWithFile(t *testing.T, root, relativePath, content s
 	runGit(t, root, "init", "-q", "-b", "main", source)
 	runGit(t, source, "config", "user.name", "Private Source")
 	runGit(t, source, "config", "user.email", "private@example.invalid")
+	runGit(t, source, "config", "commit.gpgsign", "false")
+	runGit(t, source, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(source, relativePath), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

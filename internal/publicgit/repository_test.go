@@ -33,6 +33,17 @@ func runPublicGitProxy() int {
 			return 1
 		}
 	}
+	if logPath := os.Getenv("SPAS_PUBLICGIT_LOG"); logPath != "" {
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return 1
+		}
+		defer f.Close()
+		record := strings.Join(os.Args[1:], " ") + "\n"
+		if _, err := f.WriteString(record); err != nil {
+			return 1
+		}
+	}
 	command := exec.Command(os.Getenv("SPAS_PUBLICGIT_REAL_GIT"), os.Args[1:]...)
 	command.Stdin = bytes.NewReader(input)
 	command.Stdout = os.Stdout
@@ -539,6 +550,156 @@ func TestBatchExclusionChecks(t *testing.T) {
 		t.Fatalf("UnexcludedPaths(mixed) = %v, want [%v]", unexcluded, p3)
 	}
 }
+func TestParseCheckIgnoreOutput(t *testing.T) {
+	t.Parallel()
+
+	empty, err := parseCheckIgnoreOutput(nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("parseCheckIgnoreOutput(nil) = %v, %v", empty, err)
+	}
+
+	pDev, _ := pathmodel.Parse("config/dev.json")
+	pNegated, _ := pathmodel.Parse("config/negated.json")
+	pUnrelated, _ := pathmodel.Parse("src/main.go")
+	pLiteralBang, _ := pathmodel.Parse("literal/!bang.txt")
+
+	// Standard quadruplet stream:
+	// 1. .git/info/exclude:1:/config/dev.json -> config/dev.json (ignored)
+	// 2. .gitignore:2:!config/negated.json -> config/negated.json (negated -> not ignored)
+	// 3. :::src/main.go -> src/main.go (non-matching -> not ignored)
+	// 4. .gitignore:4:\!literal/!bang.txt -> literal/!bang.txt (escaped bang -> ignored)
+	quads := strings.Join([]string{
+		".git/info/exclude\x001\x00/config/dev.json\x00config/dev.json",
+		".gitignore\x002\x00!config/negated.json\x00config/negated.json",
+		"\x00\x00\x00src/main.go",
+		".gitignore\x004\x00\\!literal/!bang.txt\x00literal/!bang.txt",
+	}, "\x00") + "\x00"
+
+	result, err := parseCheckIgnoreOutput([]byte(quads))
+	if err != nil {
+		t.Fatalf("parseCheckIgnoreOutput() error = %v", err)
+	}
+	if !result[pDev] {
+		t.Errorf("expected %v to be excluded", pDev)
+	}
+	if result[pNegated] {
+		t.Errorf("expected %v to NOT be excluded (negation rule)", pNegated)
+	}
+	if result[pUnrelated] {
+		t.Errorf("expected %v to NOT be excluded (non-matching)", pUnrelated)
+	}
+	if !result[pLiteralBang] {
+		t.Errorf("expected %v to be excluded (escaped literal bang)", pLiteralBang)
+	}
+
+	// Malformed (not a multiple of 4 fields)
+	if _, err := parseCheckIgnoreOutput([]byte("field1\x00field2\x00")); err == nil {
+		t.Fatal("expected error for non-quadruplet output")
+	}
+
+	// Malformed pathname
+	if _, err := parseCheckIgnoreOutput([]byte("source\x001\x00pat\x00../outside\x00")); err == nil {
+		t.Fatal("expected error for unusable pathname")
+	}
+}
+
+func TestBatchExclusionSingleProcessAndZeroMatches(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(root, "git-invocations.log")
+	t.Setenv("SPAS_PUBLICGIT_PROXY", "1")
+	t.Setenv("SPAS_PUBLICGIT_REAL_GIT", realGit)
+	t.Setenv("SPAS_PUBLICGIT_LOG", logPath)
+
+	repository, err := Discover(ctx, gitexec.Runner{Path: os.Args[0]}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p1, _ := pathmodel.Parse("spaced dir/dev.json")
+	p2, _ := pathmodel.Parse("brackets[1].json")
+	p3, _ := pathmodel.Parse("unicode-é.txt")
+	p4, _ := pathmodel.Parse("plain.txt")
+	paths := []pathmodel.Path{p1, p2, p3, p4}
+
+	// 1. Zero ignored paths: git check-ignore exits with 1, which must be handled as data (empty result).
+	_ = os.Remove(logPath)
+	excluded, err := repository.ExcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatalf("ExcludedPaths(zero ignored) error = %v", err)
+	}
+	if len(excluded) != 0 {
+		t.Fatalf("ExcludedPaths(zero ignored) = %v, want empty map", excluded)
+	}
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkIgnoreLines := filterLines(string(logData), "check-ignore")
+	if len(checkIgnoreLines) != 1 {
+		t.Fatalf("expected exactly 1 check-ignore invocation, got %d:\n%s", len(checkIgnoreLines), string(logData))
+	}
+	if !strings.Contains(checkIgnoreLines[0], "--no-index") || !strings.Contains(checkIgnoreLines[0], "--stdin") || !strings.Contains(checkIgnoreLines[0], "-z") || !strings.Contains(checkIgnoreLines[0], "--verbose") || !strings.Contains(checkIgnoreLines[0], "--non-matching") {
+		t.Fatalf("check-ignore invocation missing required flags: %q", checkIgnoreLines[0])
+	}
+
+	// 2. Add exclusions in info/exclude and a negation in .gitignore
+	excludePath, err := repository.InfoExcludePath(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(excludePath, []byte("/spaced dir/dev.json\n/brackets[1].json\n/unicode-é.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("!brackets[1].json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = os.Remove(logPath)
+	excluded, err = repository.ExcludedPaths(ctx, paths)
+	if err != nil {
+		t.Fatalf("ExcludedPaths(with exclusions) error = %v", err)
+	}
+	if !excluded[p1] {
+		t.Errorf("expected %v to be excluded", p1)
+	}
+	if excluded[p2] {
+		t.Errorf("expected %v to NOT be excluded due to .gitignore negation", p2)
+	}
+	if !excluded[p3] {
+		t.Errorf("expected %v to be excluded", p3)
+	}
+	if excluded[p4] {
+		t.Errorf("expected %v to NOT be excluded", p4)
+	}
+
+	logData, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkIgnoreLines = filterLines(string(logData), "check-ignore")
+	if len(checkIgnoreLines) != 1 {
+		t.Fatalf("expected exactly 1 check-ignore invocation, got %d:\n%s", len(checkIgnoreLines), string(logData))
+	}
+}
+
+func filterLines(content, substr string) []string {
+	var matched []string
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && strings.Contains(trimmed, substr) {
+			matched = append(matched, trimmed)
+		}
+	}
+	return matched
+}
 
 func TestSwapASCIIcase(t *testing.T) {
 	t.Parallel()
@@ -550,7 +711,8 @@ func TestSwapASCIIcase(t *testing.T) {
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, args...); err != nil {
+	cmdArgs := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
+	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, cmdArgs...); err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
 }

@@ -160,6 +160,11 @@ func (r Repository) InfoExcludePath(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
+// ExcludedPaths checks effective exclusion for candidate paths in a single
+// Git check-ignore invocation. Output is parsed as NUL-delimited quadruplets
+// (<source>\0<lineno>\0<pattern>\0<pathname>\0) produced by --verbose --non-matching.
+// At the maximum supported tree size of 10,000 entries, the output (~5 MiB max)
+// stays well within the 16 MiB stdout capture limit.
 func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (map[pathmodel.Path]bool, error) {
 	if len(paths) == 0 {
 		return make(map[pathmodel.Path]bool), nil
@@ -172,21 +177,15 @@ func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (
 		"--no-index",
 		"--stdin",
 		"-z",
+		"--verbose",
+		"--non-matching",
 	)
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); !ok || code != 1 {
 			return nil, fmt.Errorf("check public exclusions: %w", err)
 		}
 	}
-	ignored, err := parsePaths(result.Stdout)
-	if err != nil {
-		return nil, fmt.Errorf("parse ignored paths: %w", err)
-	}
-	set := make(map[pathmodel.Path]bool, len(ignored))
-	for _, path := range ignored {
-		set[path] = true
-	}
-	return set, nil
+	return parseCheckIgnoreOutput(result.Stdout)
 }
 
 func (r Repository) UnexcludedPaths(ctx context.Context, paths []pathmodel.Path) ([]pathmodel.Path, error) {
@@ -346,6 +345,31 @@ func parsePaths(output []byte) ([]pathmodel.Path, error) {
 	return paths, nil
 }
 
+func parseCheckIgnoreOutput(output []byte) (map[pathmodel.Path]bool, error) {
+	if len(output) == 0 {
+		return make(map[pathmodel.Path]bool), nil
+	}
+	fields := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	if len(fields)%4 != 0 {
+		return nil, fmt.Errorf("malformed check-ignore output: expected quadruplets, got %d fields", len(fields))
+	}
+	set := make(map[pathmodel.Path]bool)
+	for i := 0; i < len(fields); i += 4 {
+		pattern := fields[i+2]
+		pathname := fields[i+3]
+		if pathname == "" {
+			continue
+		}
+		path, err := pathmodel.ParseObserved(pathname)
+		if err != nil {
+			return nil, fmt.Errorf("public Git returned unusable path %q: %w", pathname, err)
+		}
+		if pattern != "" && !strings.HasPrefix(pattern, "!") {
+			set[path] = true
+		}
+	}
+	return set, nil
+}
 func swapASCIIcase(value string) string {
 	var result strings.Builder
 	result.Grow(len(value))

@@ -60,7 +60,7 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 	}
 	sort.Strings(managed)
 
-	var changed []string
+	changed := []string{}
 	privateRoot := state.Private.LocalRepositoryPath
 	for _, value := range managed {
 		path, err := pathmodel.Parse(value)
@@ -162,7 +162,7 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 	for _, path := range filters {
 		filterSet[path.String()] = struct{}{}
 	}
-	var changed []string
+	changed := []string{}
 	for _, change := range changes {
 		if len(filterSet) > 0 {
 			if _, found := filterSet[change.Path.String()]; !found {

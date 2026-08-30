@@ -17,6 +17,7 @@ import (
 	"github.com/getspas/spas/internal/interaction"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/spaserr"
+	"github.com/getspas/spas/internal/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -228,6 +229,30 @@ func TestVersionCommands(t *testing.T) {
 			t.Fatalf("Execute(%v) output = %q", args, output.String())
 		}
 	}
+
+	for _, args := range [][]string{{"version", "--json"}, {"--json", "version"}} {
+		var output bytes.Buffer
+		root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+		var payload struct {
+			SchemaVersion int    `json:"schemaVersion"`
+			Version       string `json:"version"`
+			Commit        string `json:"commit"`
+			Date          string `json:"date"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error = %v", output.String(), err)
+		}
+		if payload.SchemaVersion != app.JSONSchemaVersion {
+			t.Fatalf("payload.SchemaVersion = %d, want %d", payload.SchemaVersion, app.JSONSchemaVersion)
+		}
+		if payload.Version != version.Version || payload.Commit != version.Commit || payload.Date != version.Date {
+			t.Fatalf("payload = %+v, want version=%q commit=%q date=%q", payload, version.Version, version.Commit, version.Date)
+		}
+	}
 }
 
 func TestVerboseEmitsSafeDiagnosticsAndJSONSuppressesThem(t *testing.T) {
@@ -347,7 +372,7 @@ func TestExitAndErrorCodes(t *testing.T) {
 		{err: interaction.ErrDecisionRequired, exit: 4, errorKey: "decision_required"},
 		{err: spaserr.Wrap(spaserr.KindPathConflict, errors.New("conflict")), exit: 5, errorKey: "path_conflict"},
 		{err: app.ErrPrivateMergeConflict, exit: 6, errorKey: "private_merge_conflict"},
-		{err: spaserr.Wrap(spaserr.KindAuthNetwork, errors.New("auth")), exit: 7, errorKey: "github_auth_or_network"},
+		{err: spaserr.Wrap(spaserr.KindAuthNetwork, errors.New("auth")), exit: 7, errorKey: "auth_or_network"},
 		{err: spaserr.Wrap(spaserr.KindUnsafeGitState, errors.New("unsafe")), exit: 8, errorKey: "unsafe_git_state"},
 		{err: spaserr.Wrap(spaserr.KindExclusionValidation, errors.New("exclusion")), exit: 9, errorKey: "exclusion_validation_failed"},
 		{err: spaserr.Wrap(spaserr.KindLockHeld, errors.New("lock")), exit: 10, errorKey: "lock_held"},

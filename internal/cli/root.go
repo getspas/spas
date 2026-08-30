@@ -170,7 +170,7 @@ commit in the project repository.`,
 		newDoctorCommand(options),
 		newUnlinkCommand(options),
 		newCompletionCommand(),
-		newVersionCommand(),
+		newVersionCommand(options),
 	)
 	for _, command := range root.Commands() {
 		if command.Args == nil {
@@ -630,12 +630,22 @@ func newCompletionCommand() *cobra.Command {
 	return command
 }
 
-func newVersionCommand() *cobra.Command {
+func newVersionCommand(root *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show version and build information",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
+			if root.json {
+				encoder := json.NewEncoder(command.OutOrStdout())
+				encoder.SetEscapeHTML(false)
+				return encoder.Encode(map[string]any{
+					"schemaVersion": app.JSONSchemaVersion,
+					"version":       version.Version,
+					"commit":        version.Commit,
+					"date":          version.Date,
+				})
+			}
 			_, err := fmt.Fprintf(command.OutOrStdout(), "spas %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
 			return err
 		},

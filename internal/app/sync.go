@@ -58,8 +58,8 @@ type SyncOptions struct {
 var ErrPrivateMergeConflict = errors.New("private merge conflict")
 
 type plannedChange struct {
-	Path   pathmodel.Path
-	Status string
+	Path   pathmodel.Path `json:"path"`
+	Status string         `json:"status"`
 }
 
 type fileSnapshot struct {
@@ -1128,7 +1128,7 @@ func (a App) syncDryRun(
 			"action":             "sync",
 			"networkRequired":    true,
 			"privateInitialized": false,
-			"pendingAdds":        state.PendingAdds,
+			"pendingAdds":        append([]string{}, state.PendingAdds...),
 			"pendingRemovals":    state.PendingRemovalPaths(),
 		})
 	}
@@ -1235,7 +1235,7 @@ func (a App) syncDryRun(
 		"commitApprovalRequired": len(plan.Changes) > 0,
 		"commitMessageProvided":  strings.TrimSpace(options.Message) != "",
 		"conflicts":              conflicts,
-		"pendingAdds":            state.PendingAdds,
+		"pendingAdds":            append([]string{}, state.PendingAdds...),
 		"pendingRemovals":        state.PendingRemovalPaths(),
 		"localExcludeWillChange": excludePlan.Changed,
 		"mergeProtection":        mergeStatus,

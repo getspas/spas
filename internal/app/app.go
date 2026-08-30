@@ -439,8 +439,8 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 		}
 		removeIndex[pathmodel.Canonical(path, ignoreCase)] = index
 	}
-	var unenrolled []string
-	var refreshed []string
+	unenrolled := []string{}
+	refreshed := []string{}
 	for _, value := range options.Paths {
 		requested, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
 		if err != nil {
@@ -508,11 +508,11 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 	}
 	if options.DryRun {
 		return a.write(map[string]any{
-			"action":          "remove",
-			"pendingAdds":     pathsToStrings(mapPathValues(pendingAdds)),
-			"pendingRemovals": removePaths,
-			"refreshed":       refreshed,
-			"unenrolled":      unenrolled,
+			"action":            "remove",
+			"pendingAdds":       pathsToStrings(mapPathValues(pendingAdds)),
+			"pendingRemovals":   removePaths,
+			"refreshedRemovals": refreshed,
+			"unenrolled":        unenrolled,
 		})
 	}
 	state.PendingAdds = pathsToStrings(mapPathValues(pendingAdds))
@@ -636,18 +636,23 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 		return err
 	}
 	status := Status{
-		SchemaVersion:      JSONSchemaVersion,
-		Linked:             true,
-		LinkID:             state.LinkID,
-		PublicBranch:       branch,
-		PrivateRepository:  state.Private.Repository,
-		PrivateBranch:      state.Private.Branch,
-		PrivateInitialized: state.Private.Initialized,
-		PendingAdds:        append([]string{}, state.PendingAdds...),
-		PendingRemovals:    state.PendingRemovalPaths(),
-		ManagedFiles:       len(state.ManagedPaths),
-		PendingRecovery:    state.Private.Initialization != nil || state.Materializing != nil || state.ActiveMerge != nil,
-		MergeProtection:    mergeStatus,
+		SchemaVersion:       JSONSchemaVersion,
+		Linked:              true,
+		LinkID:              state.LinkID,
+		PublicBranch:        branch,
+		PrivateRepository:   state.Private.Repository,
+		PrivateBranch:       state.Private.Branch,
+		PrivateInitialized:  state.Private.Initialized,
+		PendingAdds:         append([]string{}, state.PendingAdds...),
+		PendingRemovals:     state.PendingRemovalPaths(),
+		ManagedFiles:        len(state.ManagedPaths),
+		PendingRecovery:     state.Private.Initialization != nil || state.Materializing != nil || state.ActiveMerge != nil,
+		WorkspaceModified:   []string{},
+		WorkspaceMissing:    []string{},
+		PrivateCloneMissing: []string{},
+		PathConflicts:       []string{},
+		ExclusionFailures:   []string{},
+		MergeProtection:     mergeStatus,
 	}
 	if options.ShowPaths {
 		status.PublicWorkspace = state.Public.Root

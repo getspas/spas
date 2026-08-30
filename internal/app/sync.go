@@ -1231,7 +1231,7 @@ func (a App) syncDryRun(
 		"privateClean":           clean,
 		"privateMergeInProgress": mergeInProgress,
 		"pendingRecovery":        state.Materializing != nil || state.ActiveMerge != nil,
-		"localChanges":           plan.Changes,
+		"localChanges":           append([]plannedChange{}, plan.Changes...),
 		"commitApprovalRequired": len(plan.Changes) > 0,
 		"commitMessageProvided":  strings.TrimSpace(options.Message) != "",
 		"conflicts":              conflicts,

@@ -2283,6 +2283,21 @@ func TestJSONContractPayloadKeySets(t *testing.T) {
 			"managedFiles", "privateCommitCreated", "publicRemovalsStaged", "schemaVersion", "skippedConflicts", "synchronized",
 		})
 		assertNoNullArrays(t, out.Bytes(), "skippedConflicts", "publicRemovalsStaged")
+
+		out.Reset()
+		if err := instance.Sync(ctx, SyncOptions{DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		clean := assertJSONContract(t, out.Bytes(), []string{
+			"action", "commitApprovalRequired", "commitMessageProvided", "conflicts", "expectedPrivateHead",
+			"localChanges", "localExcludeWillChange", "mergeProtection", "networkRequired", "pendingAdds",
+			"pendingRecovery", "pendingRemovals", "privateClean", "privateHead", "privateInitialized",
+			"privateMergeInProgress", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "conflicts", "pendingAdds", "pendingRemovals", "localChanges")
+		if changes := clean["localChanges"].([]any); len(changes) != 0 {
+			t.Fatalf("clean dry-run localChanges = %#v, want empty", changes)
+		}
 	})
 
 	t.Run("Status", func(t *testing.T) {

@@ -80,13 +80,15 @@ func fromPath(value string, transport provider.Transport) (provider.RepositoryRe
 	if len(parts) != 2 || !componentPattern.MatchString(parts[0]) || !componentPattern.MatchString(parts[1]) {
 		return provider.RepositoryRef{}, fmt.Errorf("GitHub repository must be OWNER/REPOSITORY")
 	}
-	if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+	owner := strings.ToLower(parts[0])
+	repo := strings.ToLower(parts[1])
+	if owner == "." || owner == ".." || repo == "." || repo == ".." {
 		return provider.RepositoryRef{}, fmt.Errorf("invalid GitHub repository")
 	}
 	if transport != provider.HTTPS && transport != provider.SSH {
 		return provider.RepositoryRef{}, fmt.Errorf("transport must be https or ssh")
 	}
-	canonical := parts[0] + "/" + parts[1]
+	canonical := owner + "/" + repo
 	remoteURL := "https://github.com/" + canonical + ".git"
 	if transport == provider.SSH {
 		remoteURL = "git@github.com:" + canonical + ".git"

@@ -21,9 +21,13 @@ func TestProviderResolve(t *testing.T) {
 		want      provider.RepositoryRef
 	}{
 		{"slug", "getspas/private-files", provider.HTTPS, provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
+		{"slug mixed case", "GetSpas/Private-Files", provider.HTTPS, provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
 		{"https", "https://github.com/getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
+		{"https mixed case", "https://github.com/GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
 		{"ssh", "git@github.com:getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
+		{"ssh mixed case", "git@github.com:GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
 		{"ssh URL", "ssh://git@github.com/getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
+		{"ssh URL mixed case", "ssh://git@github.com/GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
 	}
 	for _, test := range tests {
 		test := test

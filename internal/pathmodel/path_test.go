@@ -3,6 +3,7 @@ package pathmodel
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -132,7 +133,7 @@ func TestParseAllowsComponentAtPortableASCIILimit(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsTotalPathLengthExceedingWindowsLimit(t *testing.T) {
+func TestResolveAllowsTotalPathLengthExceedingWindowsLimit(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -140,12 +141,16 @@ func TestResolveRejectsTotalPathLengthExceedingWindowsLimit(t *testing.T) {
 	// Note each component is <= 255 bytes, but total length exceeds 260.
 	comp := strings.Repeat("a", 100)
 	rel := filepath.Join(comp, comp, comp)
-	_, _, err := Resolve(root, root, rel)
-	if err == nil {
-		t.Fatal("Resolve() error = nil, want total path length error")
+	path, abs, err := Resolve(root, root, rel)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v, want nil", err)
 	}
-	if !strings.Contains(err.Error(), "exceeds the cross-platform limit") {
-		t.Fatalf("Resolve() error = %v, want cross-platform limit error", err)
+	if len(abs) < 260 {
+		t.Fatalf("len(abs) = %d, want >= 260", len(abs))
+	}
+	expected := comp + "/" + comp + "/" + comp
+	if path.String() != expected {
+		t.Fatalf("Resolve() = %q, want %q", path, expected)
 	}
 }
 
@@ -153,13 +158,26 @@ func TestValidatePathLength(t *testing.T) {
 	t.Parallel()
 
 	root := "/short/root"
+	if runtime.GOOS == "windows" {
+		root = `C:\short\root`
+	}
 	shortPath := Path("a/b/c.txt")
 	if err := ValidatePathLength(root, shortPath); err != nil {
 		t.Fatalf("ValidatePathLength(short) = %v, want nil", err)
 	}
 
 	longPath := Path(strings.Repeat("a/", 130) + "file.txt")
-	if err := ValidatePathLength(root, longPath); err == nil {
-		t.Fatal("ValidatePathLength(long) error = nil, want limit error")
+	err := ValidatePathLength(root, longPath)
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Fatal("ValidatePathLength(long) error = nil on Windows, want limit error")
+		}
+		if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") || !strings.Contains(err.Error(), "short") {
+			t.Fatalf("ValidatePathLength(long) error = %v, want Windows limit error naming root", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("ValidatePathLength(long) error = %v on %s, want nil", err, runtime.GOOS)
+		}
 	}
 }

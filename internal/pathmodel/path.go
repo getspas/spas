@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -103,10 +104,6 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve path %q: %w", value, err)
 	}
-	if len(absolute) >= limits.MaxWindowsPathLength {
-		return "", "", fmt.Errorf("total path length of %q (%d characters) exceeds the cross-platform limit of %d characters", absolute, len(absolute), limits.MaxWindowsPathLength)
-	}
-
 	relative, err := filepath.Rel(publicRoot, absolute)
 	if err != nil {
 		return "", "", fmt.Errorf("make path relative to public workspace: %w", err)
@@ -117,11 +114,13 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	}
 	return path, absolute, nil
 }
-
 func ValidatePathLength(root string, path Path) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
 	full := path.OSPath(root)
 	if len(full) >= limits.MaxWindowsPathLength {
-		return fmt.Errorf("total path length of %q (%d characters) exceeds the cross-platform limit of %d characters", full, len(full), limits.MaxWindowsPathLength)
+		return fmt.Errorf("total path length of %q (%d characters) in root %q reaches or exceeds the Windows limit of %d characters", full, len(full), root, limits.MaxWindowsPathLength)
 	}
 	return nil
 }

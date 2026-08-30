@@ -927,6 +927,9 @@ func (r Repository) ValidateTree(ctx context.Context, revision string) error {
 		if (entry.Mode != "100644" && entry.Mode != "100755") || entry.Type != "blob" {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("private path %q uses unsupported Git mode %s", entry.Path, entry.Mode))
 		}
+		if err := pathmodel.ValidatePathLength(r.Path, entry.Path); err != nil {
+			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
 		if err := ValidateManagedPath(entry.Path); err != nil {
 			return err
 		}

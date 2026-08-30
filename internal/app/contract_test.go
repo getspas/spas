@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -1789,5 +1790,251 @@ func TestDoctorUnlinkedGitError(t *testing.T) {
 	}
 	if !foundGitError {
 		t.Fatalf("expected git check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "secret.json")
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := filepath.Rel(publicRoot, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Add() error = nil, want path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
+	}
+	if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+		t.Fatalf("Add() error = %v, want Windows limit error", err)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsPrivateCloneRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	longDataDir := filepath.Join(root, strings.Repeat("d", 120), strings.Repeat("e", 100))
+	if err := os.MkdirAll(longDataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	rel := "nested/secret.json"
+	target := filepath.Join(publicRoot, "nested", "secret.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	instance.Store.DataDir = longDataDir
+
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, state, err := instance.linked(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Add() error = nil, want private clone path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
+	}
+	if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+		t.Fatalf("Add() error = %v, want Windows limit error", err)
+	}
+	if !strings.Contains(err.Error(), "data") && !strings.Contains(err.Error(), "repos") {
+		t.Fatalf("Add() error = %v, want error naming private clone root %q", err, state.Private.LocalRepositoryPath)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsSyncRemotePath(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	tempClone := filepath.Join(root, "temp-clone")
+	runGit(t, root, "clone", "-q", remote, tempClone)
+	runGit(t, tempClone, "config", "core.longpaths", "true")
+	runGit(t, tempClone, "config", "user.name", "SPAS Test")
+	runGit(t, tempClone, "config", "user.email", "spas@example.invalid")
+	longRel := filepath.Join(strings.Repeat("r", 100), strings.Repeat("s", 100), "remote.json")
+	fullTemp := filepath.Join(tempClone, longRel)
+	if err := os.MkdirAll(filepath.Dir(fullTemp), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullTemp, []byte("REMOTE=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempClone, "add", "-A")
+	runGit(t, tempClone, "commit", "-q", "-m", "add long path")
+	runGit(t, tempClone, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := instance.Sync(ctx, SyncOptions{
+		Conflict:        ConflictAbort,
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Sync() error = nil, want path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Sync() error = %v, kind = %v, want KindUnsupportedPath", err, kind)
+	}
+}
+
+func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	longPath := strings.Repeat("x", 100) + "/" + strings.Repeat("y", 100) + "/enrolled.json"
+	state, err := instance.Store.Load(publicRoot, filepath.Join(publicRoot, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ManagedPaths = []string{longPath}
+	if err := instance.Store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Remove(ctx, RemoveOptions{Paths: []string{longPath}})
+	if err != nil {
+		t.Fatalf("Remove() error = %v, want nil for enrolled path", err)
+	}
+
+	err = instance.Diff(ctx, DiffOptions{Paths: []string{longPath}})
+	if err != nil {
+		t.Fatalf("Diff() error = %v, want nil for enrolled path", err)
+	}
+}
+
+func TestLinuxMacAllowsPathLengthExceedingWindowsLimit(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skipf("skipping Linux/macOS long path test on Windows")
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "secret.json")
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := filepath.Rel(publicRoot, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(target) < 260 {
+		t.Fatalf("len(target) = %d, want >= 260", len(target))
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	}); err != nil {
+		t.Fatalf("Add() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Sync(ctx, SyncOptions{
+		Conflict:        ConflictAbort,
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+		Message:         "sync long path",
+	}); err != nil {
+		t.Fatalf("Sync() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Diff(ctx, DiffOptions{Paths: []string{rel}}); err != nil {
+		t.Fatalf("Diff() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Remove(ctx, RemoveOptions{Paths: []string{rel}}); err != nil {
+		t.Fatalf("Remove() error = %v, want nil on non-Windows", err)
 	}
 }

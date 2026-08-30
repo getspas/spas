@@ -230,7 +230,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	if err != nil {
 		return err
 	}
-	files, err := a.expandPaths(repository.Root, options.Paths)
+	files, err := a.expandPaths(repository.Root, state.Private.LocalRepositoryPath, options.Paths)
 	if err != nil {
 		return err
 	}
@@ -1026,10 +1026,10 @@ func (a App) validateRepositoryIdentity(state linkstate.State) error {
 	return nil
 }
 
-func (a App) expandPaths(root string, values []string) ([]pathmodel.Path, error) {
+func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]pathmodel.Path, error) {
 	set := make(map[string]pathmodel.Path)
 	for _, value := range values {
-		path, absolute, err := pathmodel.Resolve(root, a.PathBase, value)
+		path, absolute, err := pathmodel.Resolve(workspaceRoot, a.PathBase, value)
 		if err != nil {
 			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("resolve managed path %q: %w", value, err))
 		}
@@ -1038,13 +1038,19 @@ func (a App) expandPaths(root string, values []string) ([]pathmodel.Path, error)
 			return nil, fmt.Errorf("inspect %q: %w", value, err)
 		}
 		if info.Mode().IsRegular() {
+			if err := pathmodel.ValidatePathLength(workspaceRoot, path); err != nil {
+				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
+			if err := pathmodel.ValidatePathLength(privateRoot, path); err != nil {
+				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
 			if err := privategit.ValidateManagedPath(path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if err := pathmodel.ValidateNoSymlinkComponents(root, path); err != nil {
+			if err := pathmodel.ValidateNoSymlinkComponents(workspaceRoot, path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if _, statErr := os.Lstat(path.OSPath(root)); statErr != nil {
+			if _, statErr := os.Lstat(path.OSPath(workspaceRoot)); statErr != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
 					"%q: the on-disk name does not match its Unicode NFC form and cannot be enrolled portably; rename the file to its NFC spelling", value))
 			}
@@ -1073,7 +1079,7 @@ func (a App) expandPaths(root string, values []string) ([]pathmodel.Path, error)
 			if !entry.Type().IsRegular() {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("directory %q contains unsupported file type %q", value, current))
 			}
-			relative, err := filepath.Rel(root, current)
+			relative, err := filepath.Rel(workspaceRoot, current)
 			if err != nil {
 				return err
 			}
@@ -1081,13 +1087,16 @@ func (a App) expandPaths(root string, values []string) ([]pathmodel.Path, error)
 			if err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if err := pathmodel.ValidatePathLength(root, managed); err != nil {
+			if err := pathmodel.ValidatePathLength(workspaceRoot, managed); err != nil {
+				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
+			if err := pathmodel.ValidatePathLength(privateRoot, managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
 			if err := privategit.ValidateManagedPath(managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if _, statErr := os.Lstat(managed.OSPath(root)); statErr != nil {
+			if _, statErr := os.Lstat(managed.OSPath(workspaceRoot)); statErr != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
 					"%q: the on-disk name does not match its Unicode NFC form and cannot be enrolled portably; rename the file to its NFC spelling", current))
 			}

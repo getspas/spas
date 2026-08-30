@@ -485,7 +485,6 @@ func TestValidateBranchNameCancellation(t *testing.T) {
 	}
 }
 
-
 func TestHeadRejectsNonCommitRef(t *testing.T) {
 	t.Parallel()
 
@@ -779,6 +778,41 @@ func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
 	err := repository.ValidateTree(context.Background(), "HEAD")
 	if err == nil || !strings.Contains(err.Error(), "non-portable") {
 		t.Fatalf("ValidateTree() error = %v, want portability conflict", err)
+	}
+}
+
+func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "user.name", "SPAS Test")
+	runGit(t, root, "config", "user.email", "spas@example.invalid")
+	first := hashBlob(t, root, "first")
+	longPath := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/deep.json"
+	runGit(t, root, "update-index", "--add", "--cacheinfo", "100644,"+first+","+longPath)
+	runGit(t, root, "commit", "-q", "-m", "long path commit")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(t.TempDir(), "safety"),
+	}
+	err := repository.ValidateTree(context.Background(), "HEAD")
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Fatal("ValidateTree() error = nil on Windows, want path length error")
+		}
+		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+			t.Fatalf("ValidateTree() error kind = %v, want KindUnsupportedPath", kind)
+		}
+		if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+			t.Fatalf("ValidateTree() error = %v, want Windows limit error", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("ValidateTree() error = %v on %s, want nil", err, runtime.GOOS)
+		}
 	}
 }
 

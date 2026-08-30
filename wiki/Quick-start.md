@@ -41,7 +41,7 @@ If your Git environment uses HTTPS authentication:
 spas link your-org/project-assets --transport https --branch main
 ```
 
-`spas link` operates entirely offline. It validates the local Git workspace structure and saves the link state locally without making network calls or modifying workspace files.
+`spas link` validates the local Git workspace structure and saves the link state locally without cloning anything or modifying workspace files. By default it also runs one anonymous, credential-free probe against GitHub and asks for confirmation when the repository turns out to be publicly readable; pass `--allow-public` to skip the probe, or `--dry-run` to preview the link with no network access at all.
 
 Verify the link status:
 

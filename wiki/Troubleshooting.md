@@ -49,9 +49,9 @@ spas doctor --json
 
 ---
 
-### `github_auth_or_network` (Exit Code 7)
+### `auth_or_network` (Exit Code 7)
 
-- **Cause:** Git was unable to authenticate with GitHub or encountered a network timeout.
+- **Cause:** Git was unable to authenticate with the remote repository or encountered a network timeout.
 - **Fix:**
   - Verify your SSH keys (`ssh -T git@github.com`) or HTTPS credential helper.
   - Confirm repository permissions for your GitHub user account.

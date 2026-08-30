@@ -9,7 +9,7 @@ Please review these operational boundaries before integrating SPAS into your wor
 ## 1. Repository Visibility & Access Control
 
 - **Public vs. Private Repositories:** SPAS automatically verifies linked repository visibility using an offline-credential-free probe (`git ls-remote` with credential helpers and prompts disabled). If the linked repository is publicly readable, SPAS requires explicit interactive confirmation or the `--allow-public` CLI flag to prevent accidental exposure of managed assets. Always ensure your repository is configured as **Private** on GitHub before syncing sensitive files.
-- **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository, but does not alter local filesystem file permissions. Anyone with local read access to your project workspace directory can read the files.
+- **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository. Files it materializes during sync inherit standard Git checkout semantics — created with maximal modes filtered by your process umask, exactly as `git clone` of the linked repository would produce — and only Git's executable bit is preserved across machines. Recovery copies under the SPAS data directory remain owner-only. Anyone with local read access to your project workspace directory can read the files.
 - **Git URL Rewrites:** SPAS verifies its recorded origin URL, but respects your system and global Git configuration (including `url.*.insteadOf` and `pushInsteadOf` rewrites). Ensure your global Git configuration points to trusted remotes.
 
 ---
@@ -46,7 +46,7 @@ Please review these operational boundaries before integrating SPAS into your wor
 - **Submodules & LFS Pointers:** Git submodules and Git LFS pointer files are not supported.
 - **Special Git Files:** `.gitignore`, `.gitattributes`, and `.gitmodules` cannot be managed by SPAS.
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
-- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes, total absolute path lengths reaching or exceeding 260 characters (Windows `MAX_PATH`), and files with case-collision risks across Windows, macOS, and Linux are rejected.
+- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes and files with case-collision risks across Windows, macOS, and Linux are rejected on all platforms. On Windows, a preflight check rejects paths when either the workspace or the private clone absolute path reaches or exceeds 260 characters (Windows `MAX_PATH`); this check is machine-local, so long roots on another machine cannot be anticipated and may still be rejected by Git or the host filesystem.
 
 ---
 

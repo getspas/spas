@@ -33,7 +33,7 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. It verifies repository visibility using an anonymous probe and prompts for confirmation if the repository is publicly readable.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. It verifies repository visibility using an anonymous probe and prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--dry-run` skips the probe entirely. Owner and repository names are case-insensitive and canonicalized to lowercase.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -41,7 +41,7 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving |
-| `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation |
+| `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
 
 ### Link Examples
 
@@ -150,7 +150,7 @@ SPAS never creates commits in your project repository.
 | `--continue` | Flag | `false` | Continue a merge in the linked repository after resolving conflicts |
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
-| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation |
+| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
 
 ### Sync Examples
 
@@ -225,6 +225,7 @@ spas doctor [flags]
 
 - When run with `--json`, `spas doctor` outputs a single diagnostic JSON object to stdout.
 - Returns exit code `0` when healthy, or nonzero when issues require attention.
+- Outside a Git repository, or in a repository that is not linked, `doctor` runs the environment checks it can (Git version, data directories, advisory locking, and — inside a repository — worktree shape) and exits `0` with a warning notice (`workspace` when not in a Git repository, or `link-state` when unlinked) explaining that link checks were skipped.
 
 ---
 
@@ -308,9 +309,11 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 | `4` | `decision_required` | Required decision missing in non-interactive mode (e.g. `--message` or `--conflict`). |
 | `5` | `path_conflict` | Path collision with a file tracked by the main project Git repository. |
 | `6` | `private_merge_conflict` | Merge conflict in the linked repository. Resolve conflicts, then run `spas sync --continue`. |
-| `7` | `github_auth_or_network` | Git authentication or network failure when contacting GitHub. |
+| `7` | `auth_or_network` | Git authentication or network failure when contacting remote provider. |
 | `8` | `unsafe_git_state` | Unsafe Git state detected (detached HEAD, uncommitted project merge, multiple worktrees). |
 | `9` | `exclusion_validation_failed` | `.git/info/exclude` does not match SPAS state or tracked `.gitignore` conflicts. |
 | `10` | `lock_held` | Another SPAS process is holding the link advisory lock. |
 | `11` | `unsupported_path` | Path is not a regular file (symlinks, junctions, control characters, or invalid encodings). |
 | `130` | `interrupted` | Execution cancelled by user interrupt (Ctrl+C / SIGINT). |
+
+When `--timeout` expires, the interrupted operation fails with exit code `1` (`operation_failed`); exit code `130` remains reserved for user signals.

@@ -44,9 +44,17 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 | `error.code` | `string` | Stable machine-readable error classification (e.g. `not_linked`, `decision_required`, `path_conflict`). |
 | `error.message` | `string` | Human-readable explanation of the failure. |
 
+A command that already wrote its structured payload (for example `spas doctor` reporting findings) exits nonzero without emitting a second envelope.
+
 ---
 
 ## 3. Command Payload Schemas
+
+Conventions used below:
+
+- Managed paths are workspace-relative, slash-separated strings.
+- Keys marked **conditional** are present only under the stated condition.
+- Array-typed fields serialize as empty arrays (`[]`) rather than `null` when empty.
 
 ### `spas link`
 
@@ -58,9 +66,12 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "linked": true,
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
-  "privateBranch": "main"
+  "networkAccess": true
 }
 ```
+
+- `publicWorkspace` — absolute path of the linked workspace root.
+- `networkAccess` — `true` if the visibility probe contacted GitHub during this invocation; `false` when `--allow-public` bypassed the probe.
 
 #### Link Dry-Run Payload (`--dry-run`)
 
@@ -70,9 +81,14 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "action": "link",
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
-  "privateBranch": "main"
+  "transport": "ssh",
+  "branch": "main",
+  "networkAccess": false
 }
 ```
+
+- `branch` is the empty string when no `--branch` was provided (the branch is selected during first sync).
+- Dry-run performs no network access; the visibility probe is skipped.
 
 ---
 
@@ -88,9 +104,15 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
     "testdata/mock-api.json"
   ],
   "canceledRemovals": [],
-  "skippedTrackedPaths": []
+  "skippedTrackedPaths": [],
+  "pendingSync": true
 }
 ```
+
+- `added` — paths newly enrolled by this command.
+- `canceledRemovals` — pending removals cancelled because the path was re-added.
+- `skippedTrackedPaths` — paths skipped because public Git tracks them.
+- `pendingSync` — `true` while enrolled additions await `spas sync`.
 
 #### Add Dry-Run Payload (`--dry-run`)
 
@@ -105,9 +127,15 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
     "config/dev.json"
   ],
   "canceledRemovals": [],
-  "skippedTrackedPaths": []
+  "skippedTrackedPaths": [],
+  "localExcludeWillChange": true,
+  "mergeProtection": "enable"
 }
 ```
+
+- `pendingAdds` — the complete pending-addition set after the command.
+- `localExcludeWillChange` — whether the SPAS block in `.git/info/exclude` would be rewritten.
+- `mergeProtection` — the resolved merge-protection action (`"enable"` or `"skip"`).
 
 ---
 
@@ -121,11 +149,14 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "pendingRemovals": [
     "config/dev.json"
   ],
-  "pendingSync": true,
-  "refreshedRemovals": [],
-  "unenrolled": []
+  "pendingSync": true
 }
 ```
+
+Conditional keys:
+
+- `refreshedRemovals` (array, **conditional**) — already-pending removals whose recorded state this command refreshed; present only when non-empty.
+- `unenrolled` (array, **conditional**) — never-synced pending additions that were unenrolled immediately; present only when non-empty. Each such path is also reported on stderr as no longer excluded from public Git.
 
 #### Remove Dry-Run Payload (`--dry-run`)
 
@@ -136,7 +167,9 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "pendingAdds": [],
   "pendingRemovals": [
     "config/dev.json"
-  ]
+  ],
+  "refreshedRemovals": [],
+  "unenrolled": []
 }
 ```
 
@@ -153,14 +186,81 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "privateCommitCreated": true,
   "managedFiles": 2,
   "skippedConflicts": [],
-  "publicRemovalsStaged": [],
-  "deferredAdditions": [],
-  "deferredRemovals": [],
-  "recoveryCopies": "/path/to/data/recovery/link-id/op-timestamp"
+  "publicRemovalsStaged": []
 }
 ```
 
-#### Sync Dry-Run Payload (`--dry-run`)
+Conditional keys:
+
+- `deferredAdditions` (array, **conditional**) — pending additions whose workspace file is currently missing; enrollment is kept, nothing was staged. Present only when non-empty.
+- `deferredRemovals` (array, **conditional**) — pending removals whose workspace file changed after removal was requested; nothing was deleted. Present only when non-empty.
+- `recoveryCopies` (string, **conditional**) — absolute directory that received recovery copies during this run. Present only when copies were written.
+
+#### Sync Continue Payload (`--continue`)
+
+```json
+{
+  "schemaVersion": 1,
+  "synchronized": true,
+  "mergeContinued": true
+}
+```
+
+- `recoveryCopies` (string, **conditional**) — as in the sync success payload.
+
+#### Sync Abort Payloads (`--abort`)
+
+One of three shapes, depending on the recorded recovery state:
+
+```json
+{
+  "schemaVersion": 1,
+  "mergeAborted": true,
+  "gitNativeRecovery": true
+}
+```
+
+A Git-native merge without SPAS recovery state was aborted.
+
+```json
+{
+  "schemaVersion": 1,
+  "mergeAborted": false,
+  "mergeRecoveryCleared": true
+}
+```
+
+SPAS merge recovery state was cleared; `mergeAborted` reports whether a Git merge was also aborted.
+
+```json
+{
+  "schemaVersion": 1,
+  "mergeAborted": true,
+  "skippedPublicPaths": [],
+  "deferredPaths": []
+}
+```
+
+A full abort with workspace restoration. `recoveryCopies` (string, **conditional**) is added when copies were written.
+
+#### Sync Dry-Run Payload (Uninitialized Clone)
+
+Emitted when the private clone has not been initialized yet:
+
+```json
+{
+  "schemaVersion": 1,
+  "action": "sync",
+  "networkRequired": true,
+  "privateInitialized": false,
+  "pendingAdds": [
+    "config/dev.json"
+  ],
+  "pendingRemovals": []
+}
+```
+
+#### Sync Dry-Run Payload (Initialized Clone)
 
 ```json
 {
@@ -168,23 +268,35 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "action": "sync",
   "networkRequired": false,
   "privateInitialized": true,
-  "managedFiles": 2,
+  "privateHead": "e6a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d",
+  "expectedPrivateHead": "e6a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d",
+  "privateClean": true,
+  "privateMergeInProgress": false,
+  "pendingRecovery": false,
+  "localChanges": [
+    {
+      "path": "config/dev.json",
+      "status": "M"
+    }
+  ],
+  "commitApprovalRequired": true,
+  "commitMessageProvided": false,
+  "conflicts": [],
   "pendingAdds": [],
   "pendingRemovals": [],
-  "workspaceModified": [],
-  "workspaceMissing": []
+  "localExcludeWillChange": false,
+  "mergeProtection": {
+    "branch": "main",
+    "enabled": true,
+    "value": "--no-overwrite-ignore",
+    "present": true
+  }
 }
 ```
 
-#### Sync Merge Abort Payload (`--abort`)
-
-```json
-{
-  "schemaVersion": 1,
-  "mergeAborted": true,
-  "mergeRecoveryCleared": true
-}
-```
+- `localChanges` entries have the shape `{"path": "...", "status": "..."}` with status `"A"` (added), `"M"` (modified), or `"D"` (deleted).
+- `conflicts` entries have the shape `{"kind": "...", "publicPath": "...", "privatePath": "..."}` where `kind` is one of `tracked_path`, `file_directory`, `case_insensitive_filesystem`, `cross_platform_filesystem`.
+- In `mergeProtection`, the keys `value`, `present`, and `ambiguous` are omitted when empty or `false`.
 
 ---
 
@@ -194,13 +306,11 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 {
   "schemaVersion": 1,
   "linked": true,
-  "linkId": "8f9a2b4c",
-  "publicWorkspace": "/path/to/project",
+  "linkId": "lnk_3f9a2b4c17d0",
   "publicBranch": "main",
   "privateRepository": "getspas/private-assets",
   "privateBranch": "main",
   "privateInitialized": true,
-  "privateClone": "/path/to/checkouts/8f9a2b4c",
   "pendingAdds": [],
   "pendingRemovals": [],
   "managedFiles": 2,
@@ -217,17 +327,24 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   "pendingRecovery": false,
   "privateClean": true,
   "mergeProtection": {
-    "status": "enabled",
-    "installed": true
+    "branch": "main",
+    "enabled": true,
+    "value": "--no-overwrite-ignore",
+    "present": true
   }
 }
 ```
+
+- `linkId` — the link identity, `lnk_` followed by 12 hexadecimal characters.
+- `publicWorkspace` and `privateClone` (strings, **conditional**) — absolute paths, present only with `--show-paths`.
+- `publicBranch`, `privateBranch`, `expectedPrivateHead`, `actualPrivateHead`, `privateAhead`, `privateBehind`, and `privateClean` are omitted when unknown — for example before initialization, on a detached HEAD, or when remote-tracking information is unavailable.
+- `mergeProtection` has the same shape as in the sync dry-run payload.
 
 ---
 
 ### `spas diff`
 
-#### Diff Working Tree
+#### Diff Working Tree Payload
 
 ```json
 {
@@ -239,7 +356,9 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 }
 ```
 
-#### Diff Staged (`--staged`)
+- `changedPaths` is an empty array (`[]`) when no managed path differs.
+
+#### Diff Staged Payload (`--staged`)
 
 ```json
 {
@@ -249,6 +368,8 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
   ]
 }
 ```
+
+- `stagedPaths` is an empty array (`[]`) when nothing is staged.
 
 ---
 
@@ -272,18 +393,28 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
     {
       "name": "lock",
       "status": "ok",
-      "message": "advisory lock acquired and released successfully"
+      "message": "advisory file locking is functional"
     },
     {
-      "name": "exclusions",
+      "name": "worktrees",
       "status": "ok",
-      "message": "managed paths are effectively excluded from public Git"
+      "message": "single public worktree"
+    },
+    {
+      "name": "local-exclusions",
+      "status": "ok",
+      "message": "2 private path(s) effectively excluded"
     }
   ],
   "warnings": 0,
   "errors": 0
 }
 ```
+
+- `status` is one of `ok`, `warning`, `error`; `healthy` is `false` when any check reports `error`.
+- Check inventory: the environment checks `git`, `data-dirs`, and `lock` always run. Outside a Git repository, `workspace` is added with a warning status. Inside a Git repository, `worktrees` is added. In an unlinked workspace, `link-state` is reported with a warning status. In a linked workspace the link checks also run: `link-state`, `pending-recovery`, `case-policy`, `merge-protection`, `pull-mode`, `pending-ownership-transfers`, `path-ownership`, `local-exclusions`, and `exclude-block-integrity`, plus — depending on clone state — `interrupted-private-merge`, `remote-config`, `private-clone`, `expected-private-head`, `unsupported-private-file-types`, or `private-clone-initialization`.
+- With `--json`, findings still exit `1` after the payload is written; no separate error envelope follows.
+- Outside a Git repository or in an unlinked workspace, the check list records the truncation as a warning (`workspace` or `link-state`) and the command exits `0`.
 
 ---
 
@@ -293,8 +424,31 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 {
   "schemaVersion": 1,
   "unlinked": true,
-  "publicWorkspace": "/path/to/project",
-  "removedFiles": [],
-  "failedRemovalFiles": []
+  "keptFiles": true
 }
 ```
+
+Conditional keys:
+
+- `workspaceFilesNowVisibleToPublicGit` (array, **conditional**) — managed paths whose exclusion rules were removed while the files stayed in the workspace; present only when files were kept and at least one path was affected.
+- `privateCloneRemoved` (boolean, **conditional**) — present as `true` only when `--remove-private-clone` completed its cleanup.
+
+---
+
+### `spas version`
+
+#### Version Success Payload (`--json`)
+
+```json
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "date": "2026-08-30T00:00:00Z"
+}
+```
+
+- `version` — semantic version string or `"dev"`.
+- `commit` — Git commit SHA (with optional `-dirty` suffix) or `"unknown"`.
+- `date` — build timestamp (RFC 3339) or `"unknown"`.
+- Without `--json`, `spas version` prints plain text: `spas VERSION (commit COMMIT, built DATE)`.

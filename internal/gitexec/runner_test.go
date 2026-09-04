@@ -230,6 +230,69 @@ func TestRunStreamingForwardsAllOutputAndRetainsFixedTail(t *testing.T) {
 	}
 }
 
+func TestNonInteractiveStreamingDoesNotInheritStdin(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	var streamed bytes.Buffer
+	result, err := (Runner{
+		Path:           os.Args[0],
+		NonInteractive: true,
+		Stdin:          strings.NewReader("inherited input"),
+		Stdout:         &streamed,
+	}).RunStreaming(
+		context.Background(),
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunStreaming() error = %v", err)
+	}
+	if streamed.Len() != 0 || len(result.Stdout) != 0 {
+		t.Fatalf("RunStreaming() stdout = %q, want no inherited stdin", streamed.String())
+	}
+}
+
+func TestInteractiveStreamingUsesConfiguredStdin(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	var streamed bytes.Buffer
+	_, err := (Runner{
+		Path:   os.Args[0],
+		Stdin:  strings.NewReader("interactive input"),
+		Stdout: &streamed,
+	}).RunStreaming(
+		context.Background(),
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunStreaming() error = %v", err)
+	}
+	if got := streamed.String(); got != "interactive input" {
+		t.Fatalf("RunStreaming() stdout = %q, want configured stdin", got)
+	}
+}
+
+func TestNonInteractiveRunInputUsesExplicitInput(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	result, err := (Runner{
+		Path:           os.Args[0],
+		NonInteractive: true,
+	}).RunInput(
+		context.Background(),
+		t.TempDir(),
+		strings.NewReader("explicit input"),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunInput() error = %v", err)
+	}
+	if got := string(result.Stdout); got != "explicit input" {
+		t.Fatalf("RunInput() stdout = %q, want explicit input", got)
+	}
+}
+
 func TestTailBufferRetainsExactSuffixAcrossWraps(t *testing.T) {
 	t.Parallel()
 
@@ -261,6 +324,9 @@ func TestGitExecHelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "stream-output":
 		_, _ = os.Stdout.Write(helperStreamOutput())
+		os.Exit(0)
+	case "copy-stdin":
+		_, _ = io.Copy(os.Stdout, os.Stdin)
 		os.Exit(0)
 	case "overflow-with-inherited-pipes":
 		command := exec.Command(os.Args[0], "-test.run=^TestGitExecHelperProcess$")

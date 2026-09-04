@@ -98,9 +98,8 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 	cmd.Env = r.commandEnvironment(os.Environ())
 	cmd.WaitDelay = limits.GitCommandWaitDelay
 	if r.NonInteractive {
-		// Terminal prompts and askpass helpers are both disabled so
-		// authentication fails deterministically instead of blocking on a
-		// prompt or GUI dialog nobody can answer.
+		// Disable Git credential prompts and askpass helpers for unattended
+		// commands. Streaming commands also leave inherited stdin disconnected.
 		cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
 	}
 
@@ -111,10 +110,12 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 		stderr = newTailBuffer(limits.StreamedGitDiagnosticBytes)
 		if input != nil {
 			cmd.Stdin = input
-		} else if r.Stdin != nil {
-			cmd.Stdin = r.Stdin
-		} else {
-			cmd.Stdin = os.Stdin
+		} else if !r.NonInteractive {
+			if r.Stdin != nil {
+				cmd.Stdin = r.Stdin
+			} else {
+				cmd.Stdin = os.Stdin
+			}
 		}
 		cmd.Stdout = io.MultiWriter(stdout, writerOr(r.Stdout, io.Discard))
 		cmd.Stderr = io.MultiWriter(stderr, writerOr(r.Stderr, io.Discard))

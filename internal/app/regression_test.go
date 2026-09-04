@@ -22,6 +22,7 @@ import (
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/limits"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/pathmodel"
@@ -495,6 +496,32 @@ func TestAddReportsOnlyNewlyEnrolledPaths(t *testing.T) {
 	}
 	if !result.PendingSync {
 		t.Fatal("pendingSync = false, want true")
+	}
+}
+
+func TestAddDryRunRejectsPrivateTreeAboveLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	instance, publicRoot, _, _ := fixture(t)
+	state := loadState(t, instance, publicRoot)
+	state.ManagedPaths = make([]string, limits.MaxPrivateTreeEntries)
+	for index := range state.ManagedPaths {
+		state.ManagedPaths[index] = fmt.Sprintf("managed/%05d.txt", index)
+	}
+	saveState(t, instance, state)
+
+	if err := os.WriteFile(filepath.Join(publicRoot, "overflow.txt"), []byte("overflow\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := instance.Add(ctx, AddOptions{
+		Paths:           []string{"overflow.txt"},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+		DryRun:          true,
+	})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(limits.MaxPrivateTreeEntries)) {
+		t.Fatalf("Add(dry-run) error = %v, want private-tree limit %d", err, limits.MaxPrivateTreeEntries)
 	}
 }
 

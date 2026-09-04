@@ -311,6 +311,11 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	sort.Slice(additions, func(i, j int) bool { return additions[i] < additions[j] })
 	sort.Slice(pendingRemoves, func(i, j int) bool { return pendingRemoves[i].Path < pendingRemoves[j].Path })
 	sort.Slice(cancelledRemovals, func(i, j int) bool { return cancelledRemovals[i] < cancelledRemovals[j] })
+	state.PendingAdds = pathsToStrings(additions)
+	state.PendingRemoves = pendingRemoves
+	if err := a.Store.Validate(state); err != nil {
+		return err
+	}
 	// A tree SPAS will publish must remain checkable on every supported
 	// platform, so portability is judged case-insensitively here regardless
 	// of the local filesystem.
@@ -364,8 +369,6 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 		}
 	}
 
-	state.PendingAdds = pathsToStrings(additions)
-	state.PendingRemoves = pendingRemoves
 	if err := a.Store.Save(state); err != nil {
 		rollbackErr := exclude.Restore(excludePlan)
 		if enabledBranch != "" {

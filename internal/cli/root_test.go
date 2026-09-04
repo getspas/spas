@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -237,21 +238,80 @@ func TestVersionCommands(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("Execute(%v) error = %v", args, err)
 		}
-		var payload struct {
-			SchemaVersion int    `json:"schemaVersion"`
-			Version       string `json:"version"`
-			Commit        string `json:"commit"`
-			Date          string `json:"date"`
-		}
+		var payload map[string]any
 		if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
 			t.Fatalf("json.Unmarshal(%q) error = %v", output.String(), err)
 		}
-		if payload.SchemaVersion != app.JSONSchemaVersion {
-			t.Fatalf("payload.SchemaVersion = %d, want %d", payload.SchemaVersion, app.JSONSchemaVersion)
+		wantKeys := []string{"schemaVersion", "version", "commit", "date"}
+		if len(payload) != len(wantKeys) {
+			t.Fatalf("payload keys = %v, want exactly %v", payload, wantKeys)
 		}
-		if payload.Version != version.Version || payload.Commit != version.Commit || payload.Date != version.Date {
+		for _, key := range wantKeys {
+			if _, ok := payload[key]; !ok {
+				t.Fatalf("payload keys = %v, missing %q", payload, key)
+			}
+		}
+		if payload["schemaVersion"] != float64(app.JSONSchemaVersion) {
+			t.Fatalf("schemaVersion = %v, want %d", payload["schemaVersion"], app.JSONSchemaVersion)
+		}
+		if payload["version"] != version.Version || payload["commit"] != version.Commit || payload["date"] != version.Date {
 			t.Fatalf("payload = %+v, want version=%q commit=%q date=%q", payload, version.Version, version.Commit, version.Date)
 		}
+	}
+}
+
+func TestExecuteJSONErrorEnvelopeHasExactKeys(t *testing.T) {
+	originalArgs := os.Args
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = originalArgs
+		os.Stderr = originalStderr
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	os.Args = []string{"spas", "--json", "--timeout", "-1s", "version"}
+	os.Stderr = writer
+	if exit := Execute(); exit != 2 {
+		t.Fatalf("Execute() exit = %d, want 2", exit)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = originalStderr
+	payloadBytes, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", string(payloadBytes), err)
+	}
+	if len(payload) != 3 {
+		t.Fatalf("error envelope = %#v, want exactly schemaVersion, ok, and error", payload)
+	}
+	for _, key := range []string{"schemaVersion", "ok", "error"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("error envelope = %#v, missing %q", payload, key)
+		}
+	}
+	if payload["schemaVersion"] != float64(app.JSONSchemaVersion) || payload["ok"] != false {
+		t.Fatalf("error envelope = %#v", payload)
+	}
+	errorObject, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", payload["error"])
+	}
+	if len(errorObject) != 2 || errorObject["code"] != "invalid_usage" {
+		t.Fatalf("error = %#v, want exactly code and message", errorObject)
+	}
+	if _, ok := errorObject["message"].(string); !ok {
+		t.Fatalf("error.message = %#v, want string", errorObject["message"])
 	}
 }
 

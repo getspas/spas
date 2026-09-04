@@ -2220,6 +2220,25 @@ func TestJSONContractPayloadKeySets(t *testing.T) {
 		assertNoNullArrays(t, out.Bytes(), "pendingRemovals", "unenrolled")
 	})
 
+	t.Run("RemoveRefresh", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"docs/ARCHITECTURE.md"}}); err != nil {
+			t.Fatal(err)
+		}
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"docs/ARCHITECTURE.md"}}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"pendingRemovals", "pendingSync", "refreshedRemovals", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "pendingRemovals", "refreshedRemovals")
+	})
+
 	t.Run("SyncDryRunUninitialized", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
@@ -2371,7 +2390,26 @@ func TestJSONContractPayloadKeySets(t *testing.T) {
 		assertNoNullArrays(t, out.Bytes(), "checks")
 	})
 
-	t.Run("Unlink", func(t *testing.T) {
+	t.Run("UnlinkBase", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Unlink(ctx, UnlinkOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"keptFiles", "schemaVersion", "unlinked",
+		})
+	})
+
+	t.Run("UnlinkWithVisibleFiles", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 		_, _, instance := initializedApp(t, root)
@@ -2383,6 +2421,22 @@ func TestJSONContractPayloadKeySets(t *testing.T) {
 		}
 		assertJSONContract(t, out.Bytes(), []string{
 			"keptFiles", "schemaVersion", "unlinked", "workspaceFilesNowVisibleToPublicGit",
+		})
+		assertNoNullArrays(t, out.Bytes(), "workspaceFilesNowVisibleToPublicGit")
+	})
+
+	t.Run("UnlinkPrivateCloneCleanup", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Unlink(ctx, UnlinkOptions{RemovePrivateClone: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"keptFiles", "privateCloneRemoved", "schemaVersion", "unlinked", "workspaceFilesNowVisibleToPublicGit",
 		})
 		assertNoNullArrays(t, out.Bytes(), "workspaceFilesNowVisibleToPublicGit")
 	})

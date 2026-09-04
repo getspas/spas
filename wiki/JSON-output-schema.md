@@ -413,8 +413,8 @@ Emitted when the private clone has not been initialized yet:
 
 - `status` is one of `ok`, `warning`, `error`; `healthy` is `false` when any check reports `error`.
 - Check inventory: the environment checks `git`, `data-dirs`, and `lock` always run. Outside a Git repository, `workspace` is added with a warning status. Inside a Git repository, `worktrees` is added. In an unlinked workspace, `link-state` is reported with a warning status. In a linked workspace the link checks also run: `link-state`, `pending-recovery`, `case-policy`, `merge-protection`, `pull-mode`, `pending-ownership-transfers`, `path-ownership`, `local-exclusions`, and `exclude-block-integrity`, plus — depending on clone state — `interrupted-private-merge`, `remote-config`, `private-clone`, `expected-private-head`, `unsupported-private-file-types`, or `private-clone-initialization`.
-- With `--json`, findings still exit `1` after the payload is written; no separate error envelope follows.
-- Outside a Git repository or in an unlinked workspace, the check list records the truncation as a warning (`workspace` or `link-state`) and the command exits `0`.
+- With `--json`, one or more error checks exit `1` after the payload is written; no separate error envelope follows.
+- Warnings alone exit `0`, including the `workspace` warning outside a Git repository and the `link-state` warning in an unlinked workspace.
 
 ---
 

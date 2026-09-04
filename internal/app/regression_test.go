@@ -604,9 +604,17 @@ func TestRemoveThenEditDefersTheRemoval(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(publicRoot, ".env"), []byte("TOKEN=brand-new\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, syncOptions("attempt removal")); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"deferredRemovals", "managedFiles", "privateCommitCreated", "publicRemovalsStaged",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "deferredRemovals", "publicRemovalsStaged", "skippedConflicts")
 
 	content, err := os.ReadFile(filepath.Join(publicRoot, ".env"))
 	if err != nil || string(content) != "TOKEN=brand-new\n" {
@@ -677,9 +685,17 @@ func TestOverrideSavesRecoveryCopies(t *testing.T) {
 	}
 	options := syncOptions("")
 	options.Conflict = ConflictOverride
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, options); err != nil {
 		t.Fatalf("Sync(override obstruction) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"managedFiles", "privateCommitCreated", "publicRemovalsStaged", "recoveryCopies",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "publicRemovalsStaged", "skippedConflicts")
 	if content, err := os.ReadFile(obstruction); err != nil || string(content) != "private,rows\n" {
 		t.Fatalf("data/report.csv = %q, %v; want the private version", content, err)
 	}
@@ -761,9 +777,17 @@ func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	if err := os.Remove(secret); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, syncOptions("")); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"deferredAdditions", "managedFiles", "privateCommitCreated", "publicRemovalsStaged",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "deferredAdditions", "publicRemovalsStaged", "skippedConflicts")
 
 	block := readExcludeBlock(t, publicRoot)
 	if !strings.Contains(block, "/config/secret.json") {
@@ -1201,9 +1225,15 @@ func TestMergeContinuationRetainsApprovedObstructionRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(publicRoot, "conflict.txt"), []byte("resolved\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "resolve conflict"}); err != nil {
 		t.Fatalf("Sync(continue) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"mergeContinued", "recoveryCopies", "schemaVersion", "synchronized",
+	})
 	content, err := os.ReadFile(obstructionPath)
 	if err != nil || string(content) != "private replacement\n" {
 		t.Fatalf("materialized obstruction path = %q, %v", content, err)
@@ -1310,9 +1340,15 @@ func TestGitNativeAbortRecoversMergeWithoutSPASState(t *testing.T) {
 	if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "must not continue"}); err == nil || !strings.Contains(err.Error(), "abort") {
 		t.Fatalf("Sync(--continue) error = %v, want abort-required guidance", err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Abort: true}); err != nil {
 		t.Fatalf("Sync(--abort) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"gitNativeRecovery", "mergeAborted", "schemaVersion",
+	})
 	merging, err := instance.privateRepository(state).MergeInProgress()
 	if err != nil {
 		t.Fatal(err)
@@ -1371,9 +1407,15 @@ func TestAbortOnlyMergeRecoveryClearsStateWithoutPanic(t *testing.T) {
 	state.Private.ExpectedHead = preMergeHead
 	saveState(t, instance, state)
 
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Abort: true}); err != nil {
 		t.Fatalf("Sync(abort) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"mergeAborted", "mergeRecoveryCleared", "schemaVersion",
+	})
 	reloaded := loadState(t, instance, publicRoot)
 	if reloaded.ActiveMerge != nil {
 		t.Fatalf("abort-only recovery state remains: %#v", reloaded.ActiveMerge)

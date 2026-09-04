@@ -130,12 +130,8 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	}
 
 	if !state.Private.PublicApproved && a.Provider != nil {
-		if options.AllowPublic {
-			state.Private.PublicApproved = true
-			if err := a.Store.Save(state); err != nil {
-				return err
-			}
-		} else {
+		approvedThisRun := options.AllowPublic
+		if !options.AllowPublic {
 			ref := provider.RepositoryRef{
 				Provider:  state.Private.Provider,
 				Canonical: state.Private.Repository,
@@ -159,10 +155,13 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 				if !approved {
 					return fmt.Errorf("syncing to publicly readable repository declined")
 				}
-				state.Private.PublicApproved = true
-				if err := a.Store.Save(state); err != nil {
-					return err
-				}
+				approvedThisRun = true
+			}
+		}
+		if approvedThisRun {
+			state.Private.PublicApproved = true
+			if err := a.Store.Save(state); err != nil {
+				return err
 			}
 		}
 	}

@@ -82,7 +82,7 @@ and checksum file are distributed through the same release channel.
 
 ## 3. Build from Source
 
-If you prefer building from source, ensure you have **Go 1.26.5 or newer** installed:
+If you prefer building from source, ensure you have **Go 1.26.8 or newer** installed:
 
 ```bash
 go install -trimpath github.com/getspas/spas@latest

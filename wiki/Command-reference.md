@@ -33,15 +33,15 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. It verifies repository visibility using an anonymous probe and prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--dry-run` skips the probe entirely. Owner and repository names are case-insensitive and canonicalized to lowercase.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. By default it runs a networked visibility probe with Git credential helpers and prompts disabled, then prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--allow-public` and `--dry-run` both skip the probe. Owner and repository names are case-insensitive and canonicalized to lowercase.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--transport` | `https` \| `ssh` | *Prompt* / `https` | Git transport protocol for `OWNER/REPOSITORY` references (defaults to `https` in non-interactive mode) |
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
-| `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving |
-| `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
+| `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving or network access |
+| `--allow-public` | Flag | `false` | Accept public-repository risk and skip the visibility probe (approval is recorded in link state; later syncs skip the probe) |
 
 ### Link Examples
 

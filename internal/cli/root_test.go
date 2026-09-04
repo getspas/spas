@@ -130,7 +130,7 @@ func TestMutatingCommandHelpExplainsBehaviorAndOneLineUse(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string][]string{
-		"link":   {"no network request", "One line", "--non-interactive"},
+		"link":   {"visibility probe", "--allow-public", "--dry-run", "One line", "--non-interactive"},
 		"add":    {"local exclude file", "One line", "--non-interactive"},
 		"remove": {"does not", "--non-interactive"},
 		"sync":   {"never creates a commit in the project repository", "One line", "--non-interactive"},

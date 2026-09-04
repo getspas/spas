@@ -197,8 +197,10 @@ func newLinkCommand(root *rootOptions) *cobra.Command {
 		Use:   "link [OWNER/REPOSITORY | GITHUB-URL]",
 		Short: "Link this project workspace to a GitHub repository",
 		Long: `Create a local association between this project workspace and a linked GitHub
-repository. link performs no network request, clone, fetch, file copy,
-local-exclude update, or Git configuration change.`,
+repository without cloning, fetching, copying files, updating local excludes,
+or changing Git configuration. Unless --allow-public or --dry-run is used,
+link runs a GitHub visibility probe with credential helpers and prompts disabled
+and asks before accepting a publicly readable repository.`,
 		Example: `  # Interactive
   spas link
 
@@ -253,8 +255,8 @@ local-exclude update, or Git configuration change.`,
 	command.Flags().StringVar(&transport, "transport", "", "Git transport for OWNER/REPOSITORY: https or ssh")
 	command.Flags().StringVar(&branch, "branch", "", "branch in the linked repository; otherwise discover it during first sync")
 	command.Flags().BoolVar(&replace, "replace", false, "replace an existing local link without deleting its managed checkout")
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving it")
-	command.Flags().BoolVar(&allowPublic, "allow-public", false, "allow linking a publicly readable repository")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving or network access")
+	command.Flags().BoolVar(&allowPublic, "allow-public", false, "accept public-repository risk and skip the visibility probe")
 	return command
 }
 

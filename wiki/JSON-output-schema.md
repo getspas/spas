@@ -71,7 +71,7 @@ Conventions used below:
 ```
 
 - `publicWorkspace` — absolute path of the linked workspace root.
-- `networkAccess` — `true` if the visibility probe contacted GitHub during this invocation; `false` when `--allow-public` bypassed the probe.
+- `networkAccess` — `true` if the visibility probe executed during this invocation; `false` when `--allow-public` bypassed the probe.
 
 #### Link Dry-Run Payload (`--dry-run`)
 

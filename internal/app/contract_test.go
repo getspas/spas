@@ -47,7 +47,7 @@ func (r *mutateBeforeFinalByteReader) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
-func TestLinkIsStrictlyLocalAndOffline(t *testing.T) {
+func TestLinkDoesNotCloneOrMutateWorkspace(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()

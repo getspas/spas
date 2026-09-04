@@ -838,36 +838,36 @@ func TestExecutableBitSurvivesRoundTrip(t *testing.T) {
 
 func TestMaterializePermissionsInheritCheckoutPolicy(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permission bits are not meaningful on Windows")
-	}
 
-	controlRoot := t.TempDir()
-	control := func(name string, mode os.FileMode) os.FileMode {
-		t.Helper()
-		file, err := os.OpenFile(filepath.Join(controlRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	var wantPlain, wantExec, wantDir os.FileMode
+	if runtime.GOOS != "windows" {
+		controlRoot := t.TempDir()
+		control := func(name string, mode os.FileMode) os.FileMode {
+			t.Helper()
+			file, err := os.OpenFile(filepath.Join(controlRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := file.Stat()
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			return info.Mode().Perm()
+		}
+		wantPlain = control("plain", 0o666)
+		wantExec = control("tool", 0o777)
+		if err := os.Mkdir(filepath.Join(controlRoot, "dir"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+		dirInfo, err := os.Stat(filepath.Join(controlRoot, "dir"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		info, err := file.Stat()
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return info.Mode().Perm()
+		wantDir = dirInfo.Mode().Perm()
 	}
-	wantPlain := control("plain", 0o666)
-	wantExec := control("tool", 0o777)
-	if err := os.Mkdir(filepath.Join(controlRoot, "dir"), 0o777); err != nil {
-		t.Fatal(err)
-	}
-	dirInfo, err := os.Stat(filepath.Join(controlRoot, "dir"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantDir := dirInfo.Mode().Perm()
 
 	ctx := context.Background()
 	instance, publicRoot, root, remote := fixture(t)
@@ -908,54 +908,67 @@ func TestMaterializePermissionsInheritCheckoutPolicy(t *testing.T) {
 		t.Fatalf("Sync() error = %v", err)
 	}
 
-	// Verify workspace materialized files and directories.
-	plainInfo, err := os.Stat(filepath.Join(publicRoot, "config", "plain.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plainInfo.Mode().Perm(); got != wantPlain {
-		t.Errorf("materialized plain file mode = %o, want %o", got, wantPlain)
-	}
-
-	execInfo, err := os.Stat(filepath.Join(publicRoot, "bin", "tool.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := execInfo.Mode().Perm(); got != wantExec {
-		t.Errorf("materialized exec file mode = %o, want %o", got, wantExec)
-	}
-
-	configDirInfo, err := os.Stat(filepath.Join(publicRoot, "config"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := configDirInfo.Mode().Perm(); got != wantDir {
-		t.Errorf("materialized config dir mode = %o, want %o", got, wantDir)
-	}
-
-	binDirInfo, err := os.Stat(filepath.Join(publicRoot, "bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := binDirInfo.Mode().Perm(); got != wantDir {
-		t.Errorf("materialized bin dir mode = %o, want %o", got, wantDir)
-	}
-
-	// Verify SPAS data directory state files remain owner-only.
-	statePath := filepath.Join(instance.Store.DataDir, "links")
-	_ = filepath.WalkDir(statePath, func(path string, entry os.DirEntry, err error) error {
+	// POSIX materialization modes follow checkout and umask policy.
+	if runtime.GOOS != "windows" {
+		plainInfo, err := os.Stat(filepath.Join(publicRoot, "config", "plain.json"))
 		if err != nil {
-			return nil
+			t.Fatal(err)
 		}
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			return nil
+		if got := plainInfo.Mode().Perm(); got != wantPlain {
+			t.Errorf("materialized plain file mode = %o, want %o", got, wantPlain)
 		}
-		if got := info.Mode().Perm(); got&0o077 != 0 {
-			t.Errorf("SPAS data file %s mode = %o, want no group/other access", path, got)
+
+		execInfo, err := os.Stat(filepath.Join(publicRoot, "bin", "tool.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := execInfo.Mode().Perm(); got != wantExec {
+			t.Errorf("materialized exec file mode = %o, want %o", got, wantExec)
+		}
+
+		configDirInfo, err := os.Stat(filepath.Join(publicRoot, "config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := configDirInfo.Mode().Perm(); got != wantDir {
+			t.Errorf("materialized config dir mode = %o, want %o", got, wantDir)
+		}
+
+		binDirInfo, err := os.Stat(filepath.Join(publicRoot, "bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := binDirInfo.Mode().Perm(); got != wantDir {
+			t.Errorf("materialized bin dir mode = %o, want %o", got, wantDir)
+		}
+	}
+
+	// Verify SPAS configuration state remains present and owner-only.
+	statePath := filepath.Join(instance.Store.ConfigDir, "links")
+	stateFiles := 0
+	if err := filepath.WalkDir(statePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(path) == ".json" {
+			stateFiles++
+		}
+		if runtime.GOOS != "windows" {
+			if got := info.Mode().Perm(); got&0o077 != 0 {
+				t.Errorf("SPAS configuration state %s mode = %o, want no group/other access", path, got)
+			}
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("walk link-state directory: %v", err)
+	}
+	if stateFiles == 0 {
+		t.Fatal("link-state directory contains no state files")
+	}
 }
 
 // F6: a sync interrupted between push and materialization must finish

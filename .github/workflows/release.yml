@@ -13,8 +13,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify release source
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  codeql:
+    name: Analyze release source
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
   release:
     name: Build draft release
+    needs:
+      - verify
+      - codeql
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -40,10 +56,6 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
-      - name: Verify modules
-        run: go mod verify
-      - name: Test tagged source
-        run: go test ./...
       - name: Build draft release
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

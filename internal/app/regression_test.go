@@ -1,7 +1,6 @@
 package app
 
-// Regression tests for the defects found during the pre-release review.
-// Each test names the finding it locks in.
+// Regression coverage for asset ownership, synchronization, and recovery.
 
 import (
 	"bytes"
@@ -525,7 +524,7 @@ func TestAddDryRunRejectsPrivateTreeAboveLimit(t *testing.T) {
 	}
 }
 
-// F1: an ownership override without a private replacement must refuse rather
+// An ownership override without a private replacement must refuse rather
 // than delete the only copy of the file.
 func TestOverrideRefusesWithoutPrivateReplacement(t *testing.T) {
 	t.Parallel()
@@ -571,7 +570,7 @@ func TestOverrideRefusesWithoutPrivateReplacement(t *testing.T) {
 	}
 }
 
-// F2a: sync --abort must rebuild the exclude block from the paths it actually
+// Sync --abort must rebuild the exclude block from the paths it actually
 // materializes, never from stale link state.
 func TestAbortKeepsEveryMaterializedPathExcluded(t *testing.T) {
 	t.Parallel()
@@ -615,7 +614,7 @@ func TestAbortKeepsEveryMaterializedPathExcluded(t *testing.T) {
 	}
 }
 
-// F3: an edit made after `spas remove` must defer the removal, not be
+// An edit made after `spas remove` must defer the removal, not be
 // destroyed by it.
 func TestRemoveThenEditDefersTheRemoval(t *testing.T) {
 	t.Parallel()
@@ -692,7 +691,7 @@ func TestRemoveThenExecutableModeChangeDefersTheRemoval(t *testing.T) {
 	}
 }
 
-// F4: both override forms must save a recovery copy of what they discard.
+// Both override forms must save a recovery copy of what they discard.
 func TestOverrideSavesRecoveryCopies(t *testing.T) {
 	t.Parallel()
 
@@ -776,7 +775,7 @@ func findRecoveryCopy(t *testing.T, dataDir, content string) bool {
 	return found
 }
 
-// F7: a pending addition whose file is temporarily missing keeps its
+// A pending addition whose file is temporarily missing keeps its
 // enrollment and its exclusion entry.
 func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	t.Parallel()
@@ -826,7 +825,7 @@ func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	}
 }
 
-// F5: the executable bit survives the round trip through the private clone.
+// The executable bit survives the round trip through the private clone.
 func TestExecutableBitSurvivesRoundTrip(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -998,7 +997,7 @@ func TestMaterializePermissionsInheritCheckoutPolicy(t *testing.T) {
 	}
 }
 
-// F6: a sync interrupted between push and materialization must finish
+// A sync interrupted between push and materialization must finish
 // materializing before workspace state is read as local edits, so a
 // teammate's pushed change is never silently reverted.
 func TestInterruptedMaterializationResumesBeforeCommitting(t *testing.T) {
@@ -2786,7 +2785,7 @@ func TestJSONCommitApprovalFailureWritesNoProse(t *testing.T) {
 	}
 }
 
-// F23: a case-only conflict with exactly one public and one private spelling
+// A case-only conflict with exactly one public and one private spelling
 // can be overridden: the public spelling is removed (staged, uncommitted) and
 // the private spelling is materialized.
 func TestCaseOnlyOverride(t *testing.T) {
@@ -2843,7 +2842,7 @@ func TestCaseOnlyOverride(t *testing.T) {
 	}
 }
 
-// F12: names a public repository may legally track (Windows-reserved,
+// Names a public repository may legally track (Windows-reserved,
 // colon-bearing) must never make SPAS unusable.
 func TestPublicTrackedNonPortableNamesDoNotBreakCommands(t *testing.T) {
 	t.Parallel()
@@ -2862,7 +2861,7 @@ func TestPublicTrackedNonPortableNamesDoNotBreakCommands(t *testing.T) {
 	}
 }
 
-// F22 (non-interactive form): the tracked-path error explains the required
+// The non-interactive tracked-path error explains the required
 // ownership change without constructing a shell command from the path.
 func TestAddTrackedPathExplainsOwnershipConflict(t *testing.T) {
 	t.Parallel()
@@ -2994,7 +2993,7 @@ func TestAddAndRemoveRevalidateEveryManagedExclusion(t *testing.T) {
 	}
 }
 
-// F24: a case-only ownership override must survive an unrelated private merge
+// A case-only ownership override must survive an unrelated private merge
 // conflict. Active merge state stores the public spelling, while continuation
 // derives and materializes the private spelling from the private index.
 func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
@@ -3068,7 +3067,7 @@ func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
 	}
 }
 
-// F27: if the developer explicitly commits the public ownership removal while
+// If the developer explicitly commits the public ownership removal while
 // resolving an unrelated private merge, continuation must not run git rm on a
 // path the public index no longer owns. The approved private replacement is
 // still materialized and excluded locally.
@@ -3180,7 +3179,7 @@ func TestOverrideContinuationAcceptsUnchangedApprovedDirtyStatus(t *testing.T) {
 	}
 }
 
-// F25: recovery state and Git merge metadata must agree. If somebody cleans or
+// Recovery state and Git merge metadata must agree. If somebody cleans or
 // aborts the SPAS-managed private merge out of band, normal sync must not read
 // conflict-marker workspace files as fresh private edits.
 func TestSyncRejectsActiveMergeStateWithoutGitMerge(t *testing.T) {
@@ -3200,7 +3199,7 @@ func TestSyncRejectsActiveMergeStateWithoutGitMerge(t *testing.T) {
 	}
 }
 
-// F26: private merge-conflict files copied into the public workspace are part
+// Private merge-conflict files copied into the public workspace are part
 // of unlink's removal/reporting set even when the remote introduced them and
 // they never reached ManagedPaths.
 func TestUnlinkWorkspacePathsIncludesActiveMergeConflicts(t *testing.T) {

@@ -1045,6 +1045,9 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 		if err != nil {
 			return nil, fmt.Errorf("inspect %q: %w", value, err)
 		}
+		if err := pathmodel.ValidateNFCSpelling(workspaceRoot, absolute); err != nil {
+			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
 		if info.Mode().IsRegular() {
 			if err := pathmodel.ValidatePathLength(workspaceRoot, path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
@@ -1057,10 +1060,6 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			}
 			if err := pathmodel.ValidateNoSymlinkComponents(workspaceRoot, path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if _, statErr := os.Lstat(path.OSPath(workspaceRoot)); statErr != nil {
-				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
-					"%q: the on-disk name does not match its Unicode NFC form and cannot be enrolled portably; rename the file to its NFC spelling", value))
 			}
 			set[path.String()] = path
 			continue
@@ -1104,9 +1103,8 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			if err := privategit.ValidateManagedPath(managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if _, statErr := os.Lstat(managed.OSPath(workspaceRoot)); statErr != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
-					"%q: the on-disk name does not match its Unicode NFC form and cannot be enrolled portably; rename the file to its NFC spelling", current))
+			if err := pathmodel.ValidateNFCSpelling(workspaceRoot, current); err != nil {
+				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
 			set[managed.String()] = managed
 			return nil

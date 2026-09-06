@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,8 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 		return a.diffStaged(ctx, repository, state, options)
 	}
 	managed := append(append([]string{}, state.ManagedPaths...), state.PendingAdds...)
+	managedSet := stringSet(state.ManagedPaths)
+	pendingAdds := stringSet(state.PendingAdds)
 	pendingRemovals := stringSet(state.PendingRemovalPaths())
 	if len(options.Paths) > 0 {
 		filter := make(map[string]struct{})
@@ -74,18 +77,8 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 			if options.NameOnly || a.JSON {
 				continue
 			}
-			args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
-			if options.Stat {
-				args = append(args, "--stat")
-			}
-			args = append(args, "--", privateFile, os.DevNull)
-			diffGit := a.Git
-			diffGit.Stdout = a.Out
-			_, diffErr := diffGit.RunStreaming(ctx, repository.Root, args...)
-			if diffErr != nil {
-				if code, ok := gitexec.ExitCode(diffErr); !ok || code != 1 {
-					return diffErr
-				}
+			if err := a.diffFiles(ctx, repository.Root, privateFile, os.DevNull, options.Stat); err != nil {
+				return err
 			}
 			continue
 		}
@@ -100,9 +93,14 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 			continue
 		}
 		equal, err := filesync.Equal(publicFile, privateFile)
-		if os.IsNotExist(err) {
-			equal = false
-			err = nil
+		var pathErr *os.PathError
+		if errors.Is(err, os.ErrNotExist) && errors.As(err, &pathErr) && pathErr.Path == privateFile {
+			_, adding := pendingAdds[value]
+			_, alreadyManaged := managedSet[value]
+			if adding && !alreadyManaged {
+				privateFile = os.DevNull
+				err = nil
+			}
 		}
 		if err != nil {
 			return err
@@ -114,18 +112,8 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 		if options.NameOnly || a.JSON {
 			continue
 		}
-		args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
-		if options.Stat {
-			args = append(args, "--stat")
-		}
-		args = append(args, "--", privateFile, publicFile)
-		diffGit := a.Git
-		diffGit.Stdout = a.Out
-		_, diffErr := diffGit.RunStreaming(ctx, repository.Root, args...)
-		if diffErr != nil {
-			if code, ok := gitexec.ExitCode(diffErr); !ok || code != 1 {
-				return diffErr
-			}
+		if err := a.diffFiles(ctx, repository.Root, privateFile, publicFile, options.Stat); err != nil {
+			return err
 		}
 	}
 	if a.JSON {
@@ -139,6 +127,38 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 		}
 	}
 	return nil
+}
+
+func (a App) diffFiles(ctx context.Context, root, oldFile, newFile string, stat bool) error {
+	args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
+	if stat {
+		args = append(args, "--stat")
+	}
+	args = append(args, "--", oldFile, newFile)
+	diffGit := a.Git
+	output := bufio.NewWriter(a.Out)
+	diffGit.Stdout = output
+	var diagnostics *bufio.Writer
+	if diffGit.Stderr != nil {
+		diagnostics = bufio.NewWriter(diffGit.Stderr)
+		diffGit.Stderr = diagnostics
+	}
+	result, err := diffGit.RunStreaming(ctx, root, args...)
+	// Buffered writers retain delivery errors even when os/exec returns the
+	// process exit status in preference to an output-copy error.
+	writeErr := output.Flush()
+	if diagnostics != nil {
+		writeErr = errors.Join(writeErr, diagnostics.Flush())
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	// Git also returns 1 when it cannot access an operand before producing a
+	// diff. A completed single-file patch or stat comparison emits output.
+	if code, ok := gitexec.ExitCode(err); ok && code == 1 && len(result.Stdout) > 0 {
+		return nil
+	}
+	return err
 }
 
 func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, state linkstate.State, options DiffOptions) error {

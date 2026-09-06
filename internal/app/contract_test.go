@@ -1969,6 +1969,16 @@ func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	state.ManagedPaths = []string{longPath}
+	// Exercise argument resolution with an actual old diff operand. Git's
+	// long-path support is independent of SPAS's enrollment preflight.
+	runGit(t, publicRoot, "config", "core.longpaths", "true")
+	privateFile := filepath.Join(state.Private.LocalRepositoryPath, filepath.FromSlash(longPath))
+	if err := os.MkdirAll(filepath.Dir(privateFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateFile, []byte("enrolled\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := instance.Store.Save(state); err != nil {
 		t.Fatal(err)
 	}

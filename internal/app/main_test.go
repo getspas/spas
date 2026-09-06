@@ -19,6 +19,12 @@ func TestMain(m *testing.M) {
 func runGitProxy() int {
 	args := os.Args[1:]
 	mode := os.Getenv("SPAS_APP_GIT_PROXY")
+	if mode == "remove-before-diff" && containsArgument(args, "diff") && containsArgument(args, "--no-index") {
+		if err := os.Remove(os.Getenv("SPAS_APP_EDIT_PATH")); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	if mode == "edit-after-private-abort" {
 		marker := os.Getenv("SPAS_APP_ABORT_MARKER")
 		if _, err := os.Stat(marker); err == nil {

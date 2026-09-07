@@ -36,7 +36,11 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	if err != nil {
 		return Repository{}, fmt.Errorf("%s is not inside a Git working tree: %w", absoluteHint, err)
 	}
-	root, err := filepath.Abs(strings.TrimSpace(string(rootResult.Stdout)))
+	rootPath, err := gitexec.ParsePathOutput(rootResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public workspace root: %w", err)
+	}
+	root, err := filepath.Abs(rootPath)
 	if err != nil {
 		return Repository{}, fmt.Errorf("resolve public workspace root: %w", err)
 	}
@@ -45,7 +49,10 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	if err != nil {
 		return Repository{}, fmt.Errorf("locate public Git metadata: %w", err)
 	}
-	common := strings.TrimSpace(string(commonResult.Stdout))
+	common, err := gitexec.ParsePathOutput(commonResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public Git metadata path: %w", err)
+	}
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(root, common)
 	}
@@ -58,7 +65,11 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	if err != nil {
 		return Repository{}, fmt.Errorf("locate public worktree Git directory: %w", err)
 	}
-	gitDir, err := filepath.Abs(strings.TrimSpace(string(gitDirResult.Stdout)))
+	gitDirPath, err := gitexec.ParsePathOutput(gitDirResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public worktree Git directory: %w", err)
+	}
+	gitDir, err := filepath.Abs(gitDirPath)
 	if err != nil {
 		return Repository{}, fmt.Errorf("resolve public worktree Git directory: %w", err)
 	}
@@ -112,7 +123,7 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 	}
 	refResult, refErr := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "HEAD")
 	if refErr == nil {
-		ref := strings.TrimSpace(string(refResult.Stdout))
+		ref := strings.TrimSuffix(string(refResult.Stdout), "\n")
 		_, existsErr := r.Git.Run(ctx, r.Root, "show-ref", "--verify", "--quiet", ref)
 		if existsErr == nil {
 			return "", fmt.Errorf("public HEAD ref %q does not name a commit", ref)
@@ -126,14 +137,19 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 }
 
 func (r Repository) Branch(ctx context.Context) (string, error) {
-	result, err := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	result, err := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
 			return "", nil
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	ref, terminated := strings.CutSuffix(string(result.Stdout), "\n")
+	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
+	if !terminated || !isBranch || branch == "" || strings.ContainsAny(branch, "\x00\r\n") {
+		return "", fmt.Errorf("Git returned an invalid public branch reference")
+	}
+	return branch, nil
 }
 
 func (r Repository) TrackedPaths(ctx context.Context) ([]pathmodel.Path, error) {
@@ -157,7 +173,7 @@ func (r Repository) InfoExcludePath(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate public repository local exclude file: %w", err)
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	return gitexec.ParsePathOutput(result.Stdout)
 }
 
 // ExcludedPaths checks effective exclusion for candidate paths in a single

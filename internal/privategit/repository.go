@@ -1232,7 +1232,11 @@ func (r Repository) verifyLayout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve private clone working tree: %w", err)
 	}
-	if same, err := sameFilesystemObject(r.Path, strings.TrimSpace(string(topResult.Stdout))); err != nil {
+	topPath, err := gitexec.ParsePathOutput(topResult.Stdout)
+	if err != nil {
+		return fmt.Errorf("parse private clone working tree: %w", err)
+	}
+	if same, err := sameFilesystemObject(r.Path, topPath); err != nil {
 		return fmt.Errorf("verify private clone working tree: %w", err)
 	} else if !same {
 		return fmt.Errorf("private clone working tree was redirected outside SPAS storage")
@@ -1242,7 +1246,11 @@ func (r Repository) verifyLayout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve private clone Git directory: %w", err)
 	}
-	if same, err := sameFilesystemObject(expectedGitDir, strings.TrimSpace(string(gitDirResult.Stdout))); err != nil {
+	gitDirPath, err := gitexec.ParsePathOutput(gitDirResult.Stdout)
+	if err != nil {
+		return fmt.Errorf("parse private clone Git directory: %w", err)
+	}
+	if same, err := sameFilesystemObject(expectedGitDir, gitDirPath); err != nil {
 		return fmt.Errorf("verify private clone Git directory: %w", err)
 	} else if !same {
 		return fmt.Errorf("private clone Git metadata was redirected outside SPAS storage")

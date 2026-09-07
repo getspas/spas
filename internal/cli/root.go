@@ -676,8 +676,15 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	nonInteractive := options.nonInteractive || options.json
 	prompt := interaction.Detect(command.InOrStdin(), command.ErrOrStderr(), nonInteractive)
 	prompt.AssumeYes = options.yes
+	gitPath := options.gitPath
+	if strings.ContainsRune(gitPath, '/') || strings.ContainsRune(gitPath, filepath.Separator) || filepath.VolumeName(gitPath) != "" {
+		gitPath, err = filepath.Abs(gitPath)
+		if err != nil {
+			return app.App{}, fmt.Errorf("resolve Git executable: %w", err)
+		}
+	}
 	git := gitexec.Runner{
-		Path: options.gitPath,
+		Path: gitPath,
 		// Git terminal prompts are disabled whenever SPAS itself cannot
 		// prompt, including non-TTY runs, so authentication fails
 		// deterministically instead of hanging while the link lock is held.

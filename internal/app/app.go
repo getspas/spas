@@ -1170,11 +1170,11 @@ func (a App) planMergeProtection(ctx context.Context, repository publicgit.Repos
 	}
 	if status.Ambiguous {
 		if policy == MergeEnable || policy == MergeRequire {
-			return "", spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("merge protection policy %q cannot install protection on public branch %q because it has multiple mergeOptions values", policy, status.Branch))
+			return "", mergeprotect.PolicyError(status)
 		}
 		if policy == MergeAsk {
 			if err := a.warnf(
-				"warning: public branch %q has multiple mergeOptions values; SPAS will not modify them. Add --no-overwrite-ignore to that branch's local merge options manually if you want overwrite protection.\n",
+				"warning: merge protection is unverified for public branch %q; configure one direct repository-local mergeOptions value using supported flags and --no-overwrite-ignore.\n",
 				status.Branch,
 			); err != nil {
 				return "", err

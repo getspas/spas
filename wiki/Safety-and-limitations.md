@@ -56,7 +56,7 @@ The local exclusion block inside `.git/info/exclude` prevents standard Git opera
 
 > [!WARNING]
 >
-> - **`.gitignore` Negation Precedence:** In Git, negation rules (`!pattern`) inside `.gitignore` or global `core.excludesFile` override exclusions in `.git/info/exclude`. If a project `.gitignore` contains a rule like `!*.json` or `!config/dev.json`, SPAS's `verifyExclusion` safety probe detects that the asset is no longer effectively ignored and halts immediately with exit code 9 (`exclusion_validation_failed`) to prevent accidental tracking by the main repository.
+> - **`.gitignore` Negation Precedence:** Git gives project `.gitignore` rules higher precedence than `.git/info/exclude`, which takes precedence over the global `core.excludesFile`. If a project `.gitignore` contains a negation such as `!*.json` or `!config/dev.json`, SPAS's `verifyExclusion` safety probe detects that the asset is no longer effectively ignored and halts with exit code 9 (`exclusion_validation_failed`).
 > - `git add -f` (force add) will bypass exclusion rules and stage private assets in your main repository.
 > - Destructive Git commands like `git clean -xdf`, forced checkouts (`git checkout -f`), or hard resets (`git reset --hard`) can delete or overwrite excluded files.
 > - **Best Practice:** Run `spas sync` before performing destructive Git operations, and review `git status` before committing.

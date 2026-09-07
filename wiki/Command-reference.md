@@ -11,7 +11,7 @@ The following flags apply to all SPAS commands:
 | Option | Type | Description |
 | :--- | :--- | :--- |
 | `--repo PATH` | String | Path to the project Git workspace directory (defaults to `.`) |
-| `--git PATH` | String | Custom path to the Git executable |
+| `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
 | `--non-interactive` | Flag | Disable interactive prompts; fails if any required decision flag is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
@@ -151,6 +151,19 @@ SPAS never creates commits in your project repository.
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
 | `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
+
+### Verified Merge Protection
+
+SPAS verifies `branch.<name>.mergeOptions` only when there is one value stored
+directly in the repository config file containing `--no-overwrite-ignore`. It may also
+contain `--no-edit`, `--log`, and `--no-ff`, separated by ASCII whitespace.
+With these flags, `enable` preserves the original local value for unlink
+restoration and adds `--no-overwrite-ignore` when needed.
+
+Multiple values, included values, non-local scopes, quoted or argument-taking options,
+`--overwrite-ignore`, and other flags are reported as unverified. `require`
+and `enable` reject that configuration. Configure a single supported local
+value before using those policies; `skip` leaves merge protection to you.
 
 ### Sync Examples
 

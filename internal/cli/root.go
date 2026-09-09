@@ -113,6 +113,9 @@ commit in the project repository.`,
 		SilenceUsage:  true,
 		Version:       version.Version,
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			if err := command.ValidateFlagGroups(); err != nil {
+				return spaserr.Wrap(spaserr.KindInvalidUsage, err)
+			}
 			if options.timeout < 0 {
 				return spaserr.Wrap(
 					spaserr.KindInvalidUsage,

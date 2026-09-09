@@ -704,7 +704,10 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 	}
 	refResult, refErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "HEAD")...)
 	if refErr == nil {
-		ref := strings.TrimSpace(string(refResult.Stdout))
+		ref, err := gitexec.ParseRefOutput(refResult.Stdout, "")
+		if err != nil {
+			return "", err
+		}
 		_, existsErr := r.Git.Run(ctx, r.Path, r.safeArgs("show-ref", "--verify", "--quiet", ref)...)
 		if existsErr == nil {
 			return "", fmt.Errorf("private HEAD ref %q does not name a commit", ref)
@@ -720,14 +723,14 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 }
 
 func (r Repository) Branch(ctx context.Context) (string, error) {
-	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "--short", "HEAD")...)
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "HEAD")...)
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
 			return "", nil
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	return gitexec.ParseRefOutput(result.Stdout, "refs/heads/")
 }
 
 func (r Repository) MergeInProgress() (bool, error) {
@@ -888,7 +891,8 @@ func ValidateBranchName(ctx context.Context, git gitexec.Runner, workingDirector
 		}
 		return fmt.Errorf("invalid private branch %q", branch)
 	}
-	if strings.TrimSpace(string(result.Stdout)) != branch {
+	literal, err := gitexec.ParseRefOutput(result.Stdout, "")
+	if err != nil || literal != branch {
 		return fmt.Errorf("invalid private branch %q", branch)
 	}
 	return nil
@@ -1058,12 +1062,16 @@ func (r Repository) resolveInitialBranch(ctx context.Context, requested string) 
 		return "", false, err
 	}
 	var branches []string
-	for _, line := range strings.Split(strings.TrimSpace(string(result.Stdout)), "\n") {
-		if line == "" || line == "refs/remotes/origin/HEAD" {
+	for line := range strings.SplitAfterSeq(string(result.Stdout), "\n") {
+		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "refs/remotes/origin/") {
-			branches = append(branches, strings.TrimPrefix(line, "refs/remotes/origin/"))
+		branch, err := gitexec.ParseRefOutput([]byte(line), "refs/remotes/origin/")
+		if err != nil {
+			return "", false, err
+		}
+		if branch != "HEAD" {
+			branches = append(branches, branch)
 		}
 	}
 	sort.Strings(branches)
@@ -1079,15 +1087,15 @@ func (r Repository) resolveInitialBranch(ctx context.Context, requested string) 
 		return "", false, fmt.Errorf("private branch %q does not exist", requested)
 	}
 
-	defaultResult, defaultErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")...)
+	defaultResult, defaultErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")...)
 	if defaultErr != nil {
 		return "", false, ErrDefaultBranch
 	}
-	value := strings.TrimSpace(string(defaultResult.Stdout))
-	if !strings.HasPrefix(value, "origin/") {
+	branch, err := gitexec.ParseRefOutput(defaultResult.Stdout, "refs/remotes/origin/")
+	if err != nil {
 		return "", false, ErrDefaultBranch
 	}
-	return strings.TrimPrefix(value, "origin/"), false, nil
+	return branch, false, nil
 }
 
 func (r Repository) verifyPreparedResult(ctx context.Context, expected InitResult) error {

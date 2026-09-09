@@ -144,12 +144,7 @@ func (r Repository) Branch(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	ref, terminated := strings.CutSuffix(string(result.Stdout), "\n")
-	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
-	if !terminated || !isBranch || branch == "" || strings.ContainsAny(branch, "\x00\r\n") {
-		return "", fmt.Errorf("Git returned an invalid public branch reference")
-	}
-	return branch, nil
+	return gitexec.ParseRefOutput(result.Stdout, "refs/heads/")
 }
 
 func (r Repository) TrackedPaths(ctx context.Context) ([]pathmodel.Path, error) {

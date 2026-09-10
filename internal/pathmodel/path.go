@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -87,16 +88,14 @@ func ParseObserved(value string) (Path, error) {
 }
 
 func Resolve(publicRoot, base, value string) (Path, string, error) {
-	resolvedRoot, err := filepath.EvalSymlinks(publicRoot)
+	publicRoot, err := filepath.Abs(publicRoot)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve public workspace: %w", err)
 	}
-	publicRoot = resolvedRoot
-	resolvedBase, err := filepath.EvalSymlinks(base)
+	workspace, err := os.Stat(publicRoot)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve path base: %w", err)
+		return "", "", fmt.Errorf("inspect public workspace: %w", err)
 	}
-	base = resolvedBase
 	if filepath.IsAbs(value) {
 		base = ""
 	}
@@ -104,15 +103,38 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve path %q: %w", value, err)
 	}
-	relative, err := filepath.Rel(publicRoot, absolute)
-	if err != nil {
-		return "", "", fmt.Errorf("make path relative to public workspace: %w", err)
+	var prefixes []string
+	for prefix := absolute; ; prefix = filepath.Dir(prefix) {
+		prefixes = append(prefixes, prefix)
+		if filepath.Dir(prefix) == prefix {
+			break
+		}
 	}
-	path, err := Parse(filepath.ToSlash(relative))
-	if err != nil {
-		return "", "", err
+	// Match the workspace from the filesystem root inward, before inspecting
+	// managed components. Rebase only that prefix so Unicode spelling, missing
+	// entries, and managed symlinks remain visible to subsequent validation.
+	for _, prefix := range slices.Backward(prefixes) {
+		info, err := os.Stat(prefix)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("inspect path prefix: %w", err)
+		}
+		if !os.SameFile(workspace, info) {
+			continue
+		}
+		relative, err := filepath.Rel(prefix, absolute)
+		if err != nil {
+			return "", "", fmt.Errorf("make path relative to public workspace: %w", err)
+		}
+		path, err := Parse(filepath.ToSlash(relative))
+		if err != nil {
+			return "", "", err
+		}
+		return path, filepath.Join(publicRoot, relative), nil
 	}
-	return path, absolute, nil
+	return "", "", fmt.Errorf("path must stay inside the public workspace")
 }
 func ValidatePathLength(root string, path Path) error {
 	if runtime.GOOS != "windows" {

@@ -246,9 +246,11 @@ func TestAddRejectsSymlinksNestedGitMetadataEmptyDirectoriesAndOutsidePaths(t *t
 			ExistingExclude: ExcludePreserve,
 			MergeProtection: MergeSkip,
 		})
-		if err == nil || !strings.Contains(err.Error(), "regular file or directory") {
-			t.Fatalf("Add(symlink) error = %v", err)
+		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+			t.Fatalf("Add(symlink) error = %v, want KindUnsupportedPath", err)
 		}
+	} else {
+		t.Logf("symlink assertion not exercised: %v", err)
 	}
 
 	nested := filepath.Join(publicRoot, "nested")
@@ -1964,10 +1966,7 @@ func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 	}
 
 	longPath := strings.Repeat("x", 100) + "/" + strings.Repeat("y", 100) + "/enrolled.json"
-	state, err := instance.Store.Load(publicRoot, filepath.Join(publicRoot, ".git"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	state := loadState(t, instance, publicRoot)
 	state.ManagedPaths = []string{longPath}
 	// Exercise argument resolution with an actual old diff operand. Git's
 	// long-path support is independent of SPAS's enrollment preflight.
@@ -1983,7 +1982,7 @@ func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = instance.Remove(ctx, RemoveOptions{Paths: []string{longPath}})
+	err := instance.Remove(ctx, RemoveOptions{Paths: []string{longPath}})
 	if err != nil {
 		t.Fatalf("Remove() error = %v, want nil for enrolled path", err)
 	}

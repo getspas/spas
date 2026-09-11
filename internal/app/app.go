@@ -1036,8 +1036,9 @@ func (a App) validateRepositoryIdentity(state linkstate.State) error {
 
 func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]pathmodel.Path, error) {
 	set := make(map[string]pathmodel.Path)
+	observer := pathmodel.NewObserver(workspaceRoot)
 	for _, value := range values {
-		path, absolute, err := pathmodel.Resolve(workspaceRoot, a.PathBase, value)
+		_, absolute, err := pathmodel.Resolve(workspaceRoot, a.PathBase, value)
 		if err != nil {
 			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("resolve managed path %q: %w", value, err))
 		}
@@ -1045,7 +1046,8 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 		if err != nil {
 			return nil, fmt.Errorf("inspect %q: %w", value, err)
 		}
-		if err := pathmodel.ValidateNFCSpelling(workspaceRoot, absolute); err != nil {
+		path, err := observer.Path(absolute)
+		if err != nil {
 			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 		if info.Mode().IsRegular() {
@@ -1086,11 +1088,7 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			if !entry.Type().IsRegular() {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("directory %q contains unsupported file type %q", value, current))
 			}
-			relative, err := filepath.Rel(workspaceRoot, current)
-			if err != nil {
-				return err
-			}
-			managed, err := pathmodel.Parse(filepath.ToSlash(relative))
+			managed, err := observer.Path(current)
 			if err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
@@ -1103,15 +1101,15 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			if err := privategit.ValidateManagedPath(managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
-			if err := pathmodel.ValidateNFCSpelling(workspaceRoot, current); err != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
 			set[managed.String()] = managed
 			return nil
 		})
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := observer.Validate(); err != nil {
+		return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 	}
 	result := make([]pathmodel.Path, 0, len(set))
 	for _, path := range set {

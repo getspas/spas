@@ -20,6 +20,7 @@ func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
 		directory bool
 		hardLink  bool
 		parent    bool
+		nfc       bool
 	}{
 		{name: "selected file"},
 		{name: "directory", directory: true},
@@ -27,6 +28,8 @@ func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
 		{name: "directory hard links", directory: true, hardLink: true},
 		{name: "parent directories", parent: true},
 		{name: "recursive parent directories", directory: true, parent: true},
+		{name: "NFC selection", nfc: true},
+		{name: "NFC hard-link selection", nfc: true, hardLink: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -113,6 +116,9 @@ func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
 				}
 			}
 			selection := raw
+			if test.nfc {
+				selection = nfc
+			}
 			if test.directory {
 				selection = assets
 			}
@@ -180,9 +186,6 @@ func TestAddUnicodeSingleEntry(t *testing.T) {
 			}
 			state := loadState(t, instance, publicRoot)
 			want := "caf\u00e9/r\u00e9sum\u00e9.txt"
-			if selection == "case alias" {
-				want = "CAF\u00c9/R\u00c9SUM\u00c9.TXT"
-			}
 			if len(state.PendingAdds) != 1 || state.PendingAdds[0] != want {
 				t.Fatalf("PendingAdds = %q, want canonical spelling", state.PendingAdds)
 			}
@@ -193,6 +196,66 @@ func TestAddUnicodeSingleEntry(t *testing.T) {
 			}
 			if len(result.Stdout) != 0 {
 				t.Fatalf("selected file remains visible to Git: %q", result.Stdout)
+			}
+		})
+	}
+}
+
+func TestAddUsesDirectoryEntrySpelling(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, stored, selected string
+	}{
+		{"NFC case alias", "café/résumé.txt", "CAFÉ/RÉSUMÉ.TXT"},
+		{"uppercase entry", "CAFÉ/RÉSUMÉ.TXT", "café/résumé.txt"},
+		{"parent alias", "café/résumé.txt", "CAFÉ/résumé.txt"},
+		{"directory alias", "café/résumé.txt", "CAFÉ"},
+		{"ASCII alias", "assets/secret.txt", "ASSETS/SECRET.TXT"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			instance, publicRoot, _, _ := fixture(t)
+			stored := filepath.Join(publicRoot, filepath.FromSlash(test.stored))
+			if err := os.MkdirAll(filepath.Dir(stored), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(stored, []byte("selected secret\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selected := filepath.Join(publicRoot, filepath.FromSlash(test.selected))
+			if _, err := os.Stat(selected); errors.Is(err, os.ErrNotExist) {
+				t.Skip("volume distinguishes the selected case spelling")
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if err := instance.Add(t.Context(), AddOptions{
+				Paths: []string{selected}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			state := loadState(t, instance, publicRoot)
+			if len(state.PendingAdds) != 1 || state.PendingAdds[0] != test.stored {
+				t.Fatalf("PendingAdds = %q, want %q", state.PendingAdds, test.stored)
+			}
+			result, err := instance.Git.Run(t.Context(), publicRoot, "ls-files", "--others", "--exclude-standard", "-z")
+			if err != nil || len(result.Stdout) != 0 {
+				t.Fatalf("ordinary Git visibility = %q, %v", result.Stdout, err)
+			}
+			data, err := os.ReadFile(stored)
+			if err != nil || string(data) != "selected secret\n" {
+				t.Fatalf("selected content = %q, %v", data, err)
+			}
+			if test.name == "directory alias" {
+				selected = filepath.Join(selected, "résumé.txt")
+			}
+			if err := instance.Diff(t.Context(), DiffOptions{Paths: []string{selected}}); err != nil {
+				t.Fatalf("Diff(alias): %v", err)
+			}
+			if err := instance.Remove(t.Context(), RemoveOptions{Paths: []string{selected}}); err != nil {
+				t.Fatalf("Remove(alias): %v", err)
+			}
+			if state := loadState(t, instance, publicRoot); len(state.PendingAdds) != 0 {
+				t.Fatalf("Remove(alias) retained pending paths: %q", state.PendingAdds)
 			}
 		})
 	}

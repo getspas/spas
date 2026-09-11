@@ -1,6 +1,10 @@
 package pathmodel
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // Managed paths are normalized to NFC at the single parsing funnel, matching
 // the precomposed form Git uses on macOS: exclude patterns are not normalized
@@ -23,5 +27,46 @@ func TestParseNormalizesToNFC(t *testing.T) {
 	}
 	if got.String() != string(want) {
 		t.Fatalf("stored spelling = %q, want %q", got.String(), want)
+	}
+}
+
+func TestObserverRechecksSymlinksAfterIndexingNames(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	selected := filepath.Join(root, "secret.env")
+	if err := os.WriteFile(selected, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	observer := NewObserver(root)
+	if _, err := observer.Path(selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.env", selected); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := observer.Path(selected); err == nil {
+		t.Fatal("observer accepted a replacement symlink")
+	}
+}
+
+func TestObserverDetectsRenamedDirectoryEntries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	selected := filepath.Join(root, "café.env")
+	if err := os.WriteFile(selected, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	observer := NewObserver(root)
+	if _, err := observer.Path(selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(selected, filepath.Join(root, "CAFÉ.env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.Validate(); err == nil {
+		t.Fatal("observer accepted changed directory spelling")
 	}
 }

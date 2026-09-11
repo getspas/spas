@@ -649,7 +649,7 @@ func TestFailedPrivateCommitRollsBackManagedClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-commit")
+	enableGitProxy(t, "fail-commit")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	instance.Git.Path = os.Args[0]
 	if err := os.WriteFile(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md"), []byte("cannot commit\n"), 0o600); err != nil {

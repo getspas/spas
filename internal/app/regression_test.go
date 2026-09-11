@@ -1643,7 +1643,7 @@ func TestFailedAutomaticMergeAbortRetainsRecoveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-write-tree-and-abort")
+	enableGitProxy(t, "fail-write-tree-and-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	instance.Git.Path = os.Args[0]
 	err = instance.Sync(ctx, SyncOptions{Continue: true, Message: "resolve conflict"})
@@ -1745,7 +1745,7 @@ func TestAutomaticMergeAbortRetainsRecoveryStateWhenMarkerCannotBeInspected(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-write-tree-and-recreate-marker")
+	enableGitProxy(t, "fail-write-tree-and-recreate-marker")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_MERGE_MARKER", marker)
 	instance.Git.Path = os.Args[0]
@@ -1788,7 +1788,7 @@ func TestMergeAbortRetainsRecoveryStateWhenMergeMarkerCannotBeInspected(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "recreate-marker-after-abort")
+	enableGitProxy(t, "recreate-marker-after-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_MERGE_MARKER", marker)
 	instance.Git.Path = os.Args[0]
@@ -1828,7 +1828,7 @@ func TestMergeAbortRejectsDirtyPrivateCloneBeforeMaterialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-private-on-abort-tracked-paths")
+	enableGitProxy(t, "edit-private-on-abort-tracked-paths")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", privatePath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "dirty private abort source\n")
@@ -1879,7 +1879,7 @@ func TestMergeAbortRejectsWorkspaceEditDuringGitAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-on-private-abort")
+	enableGitProxy(t, "edit-on-private-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", conflictPath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "edit during abort\n")
@@ -1932,7 +1932,7 @@ func TestMergeAbortRejectsWorkspaceEditAfterGitAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-after-private-abort")
+	enableGitProxy(t, "edit-after-private-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_ABORT_MARKER", filepath.Join(root, "abort-completed"))
 	t.Setenv("SPAS_APP_EDIT_PATH", conflictPath)
@@ -2406,7 +2406,7 @@ func TestOwnershipOverrideRejectsEditDuringPublicUntracking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-on-public-rm")
+	enableGitProxy(t, "edit-on-public-rm")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", publicPath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "late public edit\n")
@@ -2541,7 +2541,7 @@ func TestStructuredNonFastForwardRetryIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	countPath := filepath.Join(root, "push-attempts")
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-push-nff")
+	enableGitProxy(t, "fail-push-nff")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_PUSH_COUNT", countPath)
 	instance.Git.Path = os.Args[0]

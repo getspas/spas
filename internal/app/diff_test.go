@@ -125,7 +125,7 @@ func TestDiffPropagatesOperandDisappearance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("SPAS_APP_GIT_PROXY", "remove-before-diff")
+			enableGitProxy(t, "remove-before-diff")
 			t.Setenv("SPAS_APP_REAL_GIT", realGit)
 			t.Setenv("SPAS_APP_EDIT_PATH", path)
 			instance.Git.Path = os.Args[0]

@@ -172,7 +172,7 @@ func TestValidatePathLength(t *testing.T) {
 		if err == nil {
 			t.Fatal("ValidatePathLength(long) error = nil on Windows, want limit error")
 		}
-		if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") || !strings.Contains(err.Error(), "short") {
+		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") || !strings.Contains(err.Error(), "short") {
 			t.Fatalf("ValidatePathLength(long) error = %v, want Windows limit error naming root", err)
 		}
 	} else {

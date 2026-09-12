@@ -142,7 +142,7 @@ func ValidatePathLength(root string, path Path) error {
 	}
 	full := path.OSPath(root)
 	if len(full) >= limits.MaxWindowsPathLength {
-		return fmt.Errorf("total path length of %q (%d characters) in root %q reaches or exceeds the Windows limit of %d characters", full, len(full), root, limits.MaxWindowsPathLength)
+		return fmt.Errorf("total path length of %q (%d bytes) in root %q reaches or exceeds the SPAS Windows preflight limit of %d bytes", full, len(full), root, limits.MaxWindowsPathLength)
 	}
 	return nil
 }

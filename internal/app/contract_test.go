@@ -1842,7 +1842,7 @@ func TestWindowsPathLengthPreflightRejectsWorkspaceRoot(t *testing.T) {
 	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
 		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
 	}
-	if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
 		t.Fatalf("Add() error = %v, want Windows limit error", err)
 	}
 }
@@ -1896,7 +1896,7 @@ func TestWindowsPathLengthPreflightRejectsPrivateCloneRoot(t *testing.T) {
 	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
 		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
 	}
-	if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
 		t.Fatalf("Add() error = %v, want Windows limit error", err)
 	}
 	if !strings.Contains(err.Error(), "data") && !strings.Contains(err.Error(), "repos") {

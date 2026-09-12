@@ -806,7 +806,7 @@ func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
 		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
 			t.Fatalf("ValidateTree() error kind = %v, want KindUnsupportedPath", kind)
 		}
-		if !strings.Contains(err.Error(), "reaches or exceeds the Windows limit") {
+		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
 			t.Fatalf("ValidateTree() error = %v, want Windows limit error", err)
 		}
 	} else {

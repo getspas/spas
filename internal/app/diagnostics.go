@@ -261,7 +261,11 @@ func (a App) Doctor(ctx context.Context) error {
 
 	repository, repoErr := a.publicRepository(ctx)
 	if repoErr != nil {
-		add("workspace", "warning", fmt.Sprintf("not a Git repository — link checks skipped: %v", repoErr))
+		if errors.Is(repoErr, publicgit.ErrNotRepository) {
+			add("workspace", "warning", fmt.Sprintf("not a Git repository — link checks skipped: %v", repoErr))
+		} else {
+			add("workspace", "error", fmt.Sprintf("repository inspection failed: %v", repoErr))
+		}
 		return a.renderDoctorResult(result)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,6 +24,10 @@ func TestMain(m *testing.M) {
 }
 
 func runPublicGitProxy() int {
+	if os.Getenv("SPAS_PUBLICGIT_PROXY") == "invalid-root-output" && slices.Contains(os.Args[1:], "--show-toplevel") {
+		_, _ = fmt.Fprint(os.Stdout, "unterminated Git path")
+		return 0
+	}
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return 1

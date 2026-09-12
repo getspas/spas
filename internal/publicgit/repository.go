@@ -20,6 +20,8 @@ type Repository struct {
 	Git       gitexec.Runner
 }
 
+var ErrNotRepository = errors.New("not a Git repository")
+
 func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository, error) {
 	if _, err := RequireSupportedGit(ctx, git); err != nil {
 		return Repository{}, err
@@ -34,7 +36,13 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 
 	rootResult, err := git.Run(ctx, absoluteHint, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Repository{}, fmt.Errorf("%s is not inside a Git working tree: %w", absoluteHint, err)
+		if repositoryAbsentDiagnostic(rootResult, err) {
+			if markerErr := confirmNoGitMetadata(absoluteHint); markerErr != nil {
+				return Repository{}, fmt.Errorf("inspect public workspace %q: %w", absoluteHint, errors.Join(err, markerErr))
+			}
+			return Repository{}, fmt.Errorf("%w at %q: %w", ErrNotRepository, absoluteHint, err)
+		}
+		return Repository{}, fmt.Errorf("inspect public workspace %q: %w", absoluteHint, err)
 	}
 	rootPath, err := gitexec.ParsePathOutput(rootResult.Stdout)
 	if err != nil {
@@ -75,6 +83,41 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	}
 
 	return Repository{Root: root, GitDir: gitDir, CommonDir: common, Git: git}, nil
+}
+
+func repositoryAbsentDiagnostic(result gitexec.Result, err error) bool {
+	exitErr, ok := errors.AsType[*gitexec.ExitError](err)
+	if !ok || exitErr.ExitCode != 128 || len(result.Stdout) != 0 {
+		return false
+	}
+	// Runner fixes LC_ALL=C. Match Git's parent-search diagnostics, not errors
+	// about an explicit invalid gitdir or configuration file.
+	message := strings.TrimSpace(exitErr.Stderr)
+	return message == "fatal: not a git repository (or any of the parent directories): .git" ||
+		(strings.HasPrefix(message, "fatal: not a git repository (or any parent up to mount point ") &&
+			strings.HasSuffix(message, ")\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set)."))
+}
+
+func confirmNoGitMetadata(hint string) error {
+	// Git can report absence when metadata is unreadable. Only declare absence
+	// after ruling out markers along the physical working-directory ancestry.
+	directory, err := filepath.EvalSymlinks(hint)
+	if err != nil {
+		return err
+	}
+	for {
+		marker := filepath.Join(directory, ".git")
+		if _, err := os.Lstat(marker); err == nil {
+			return fmt.Errorf("Git metadata exists at %q but repository inspection failed", marker)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect Git metadata %q: %w", marker, err)
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return nil
+		}
+		directory = parent
+	}
 }
 
 func RequireSupportedGit(ctx context.Context, git gitexec.Runner) (string, error) {

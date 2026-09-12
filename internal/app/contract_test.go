@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,7 +47,7 @@ func (r *mutateBeforeFinalByteReader) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
-func TestLinkIsStrictlyLocalAndOffline(t *testing.T) {
+func TestLinkDoesNotCloneOrMutateWorkspace(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -244,9 +246,11 @@ func TestAddRejectsSymlinksNestedGitMetadataEmptyDirectoriesAndOutsidePaths(t *t
 			ExistingExclude: ExcludePreserve,
 			MergeProtection: MergeSkip,
 		})
-		if err == nil || !strings.Contains(err.Error(), "regular file or directory") {
-			t.Fatalf("Add(symlink) error = %v", err)
+		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+			t.Fatalf("Add(symlink) error = %v, want KindUnsupportedPath", err)
 		}
+	} else {
+		t.Logf("symlink assertion not exercised: %v", err)
 	}
 
 	nested := filepath.Join(publicRoot, "nested")
@@ -436,7 +440,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v\n%s", err, output.String())
 	}
-	if !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
+	if status.SchemaVersion != JSONSchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
 		t.Fatalf("Status() = %#v", status)
 	}
 	if !reflect.DeepEqual(status.WorkspaceModified, []string{"docs/ARCHITECTURE.md"}) ||
@@ -458,10 +462,14 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 		t.Fatalf("Diff() error = %v", err)
 	}
 	var diff struct {
-		ChangedPaths []string `json:"changedPaths"`
+		SchemaVersion int      `json:"schemaVersion"`
+		ChangedPaths  []string `json:"changedPaths"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &diff); err != nil {
 		t.Fatalf("decode diff: %v\n%s", err, output.String())
+	}
+	if diff.SchemaVersion != JSONSchemaVersion {
+		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, JSONSchemaVersion)
 	}
 	if !reflect.DeepEqual(diff.ChangedPaths, []string{"docs/ARCHITECTURE.md"}) {
 		t.Fatalf("Diff() changed paths = %v", diff.ChangedPaths)
@@ -475,7 +483,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if !doctor.Healthy || doctor.Errors != 0 {
+	if doctor.SchemaVersion != JSONSchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
 		t.Fatalf("Doctor() = %#v", doctor)
 	}
 
@@ -1183,6 +1191,8 @@ func initializePublicRepository(t *testing.T, root string) string {
 	runGit(t, publicRoot, "init", "-q", "-b", "main")
 	runGit(t, publicRoot, "config", "user.name", "SPAS Test")
 	runGit(t, publicRoot, "config", "user.email", "spas@example.invalid")
+	runGit(t, publicRoot, "config", "commit.gpgsign", "false")
+	runGit(t, publicRoot, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(publicRoot, "README.md"), []byte("public\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1202,6 +1212,8 @@ func initializePrivateRemoteWithFile(t *testing.T, root, relativePath, content s
 	runGit(t, root, "init", "-q", "-b", "main", source)
 	runGit(t, source, "config", "user.name", "Private Source")
 	runGit(t, source, "config", "user.email", "private@example.invalid")
+	runGit(t, source, "config", "commit.gpgsign", "false")
+	runGit(t, source, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(source, relativePath), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1542,4 +1554,981 @@ func TestLinkedStrictlyReResolvesPersistedRepositoryIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDoctorUnlinkedNonGitWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	instance.JSON = true
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() error = %v\n%s", err, output.String())
+	}
+	var doctor DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
+		t.Fatalf("decode doctor: %v\n%s", err, output.String())
+	}
+	if !doctor.Healthy || doctor.Errors != 0 || doctor.Warnings != 1 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result with 1 warning", doctor)
+	}
+	checks := make(map[string]string)
+	messages := make(map[string]string)
+	for _, check := range doctor.Checks {
+		checks[check.Name] = check.Status
+		messages[check.Name] = check.Message
+	}
+	for _, expected := range []string{"git", "data-dirs", "lock"} {
+		if status, ok := checks[expected]; !ok || status != "ok" {
+			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
+		}
+	}
+	if status, ok := checks["workspace"]; !ok || status != "warning" {
+		t.Fatalf("expected workspace check to be warning, got %q (found=%t)", status, ok)
+	}
+	if !strings.Contains(messages["workspace"], "not a Git repository — link checks skipped:") {
+		t.Fatalf("workspace message = %q, want link checks skipped notice", messages["workspace"])
+	}
+
+	// Test text rendering mode as well
+	output.Reset()
+	instance.JSON = false
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() text error = %v\n%s", err, output.String())
+	}
+	textOutput := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok", "workspace", "warning", "not a Git repository — link checks skipped:"} {
+		if !strings.Contains(textOutput, expected) {
+			t.Errorf("text output missing %q: %s", expected, textOutput)
+		}
+	}
+}
+
+func TestDoctorUnlinkedGitWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	gitDir := filepath.Join(root, "unlinked-repo")
+	if err := os.MkdirAll(gitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "init", "-q", "-b", "main")
+	runGit(t, gitDir, "config", "user.name", "Test User")
+	runGit(t, gitDir, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(gitDir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "add", "README.md")
+	runGit(t, gitDir, "commit", "-q", "-m", "initial")
+
+	instance, output := testApp(t, gitDir, root, "")
+	instance.JSON = true
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() error = %v\n%s", err, output.String())
+	}
+	var doctor DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
+		t.Fatalf("decode doctor: %v\n%s", err, output.String())
+	}
+	if !doctor.Healthy || doctor.Errors != 0 || doctor.Warnings != 1 {
+		t.Fatalf("Doctor() = %#v, want healthy unlinked doctor result with 1 warning", doctor)
+	}
+	checks := make(map[string]string)
+	messages := make(map[string]string)
+	for _, check := range doctor.Checks {
+		checks[check.Name] = check.Status
+		messages[check.Name] = check.Message
+	}
+	for _, expected := range []string{"git", "data-dirs", "lock", "worktrees"} {
+		if status, ok := checks[expected]; !ok || status != "ok" {
+			t.Fatalf("expected check %q to be ok, got %q (found=%t)", expected, status, ok)
+		}
+	}
+	if status, ok := checks["link-state"]; !ok || status != "warning" {
+		t.Fatalf("expected link-state check to be warning, got %q (found=%t)", status, ok)
+	}
+	if messages["link-state"] != "workspace is not linked; run spas link — link checks skipped" {
+		t.Fatalf("link-state message = %q, want unlinked notice", messages["link-state"])
+	}
+
+	// Test text rendering mode as well
+	output.Reset()
+	instance.JSON = false
+	if err := instance.Doctor(ctx); err != nil {
+		t.Fatalf("Doctor() text error = %v\n%s", err, output.String())
+	}
+	textOutput := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "worktrees", "ok", "link-state", "warning", "workspace is not linked; run spas link — link checks skipped"} {
+		if !strings.Contains(textOutput, expected) {
+			t.Errorf("text output missing %q: %s", expected, textOutput)
+		}
+	}
+}
+
+func TestDoctorUnlinkedGitWorkspaceMultipleWorktrees(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	gitDir := filepath.Join(root, "unlinked-repo")
+	if err := os.MkdirAll(gitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "init", "-q", "-b", "main")
+	runGit(t, gitDir, "config", "user.name", "Test User")
+	runGit(t, gitDir, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(gitDir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitDir, "add", "README.md")
+	runGit(t, gitDir, "commit", "-q", "-m", "initial")
+
+	second := filepath.Join(root, "second-worktree")
+	runGit(t, gitDir, "worktree", "add", "-q", "-b", "second", second)
+
+	instance, output := testApp(t, gitDir, root, "")
+	instance.JSON = true
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want multiple-worktree error in unlinked repo", doctor)
+	}
+	foundWorktreeError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "worktrees" && check.Status == "error" {
+			foundWorktreeError = true
+			break
+		}
+	}
+	if !foundWorktreeError {
+		t.Fatalf("expected worktrees check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestDoctorUnlinkedDataDirUnwritable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	// Make DataDir a file so MkdirAll fails
+	dataBlocker := filepath.Join(root, "data-blocker")
+	if err := os.WriteFile(dataBlocker, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	instance.Store.DataDir = dataBlocker
+	instance.JSON = true
+
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want error when data dir is unwritable", doctor)
+	}
+	foundDataDirError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "data-dirs" && check.Status == "error" {
+			foundDataDirError = true
+			break
+		}
+	}
+	if !foundDataDirError {
+		t.Fatalf("expected data-dirs check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestDoctorUnlinkedGitError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	nonGit := filepath.Join(root, "non-git")
+	if err := os.MkdirAll(nonGit, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, output := testApp(t, nonGit, root, "")
+	instance.Git.Path = filepath.Join(root, "non-existent-git-binary")
+	instance.JSON = true
+
+	err := instance.Doctor(ctx)
+	var written OutputWrittenError
+	if !errors.As(err, &written) {
+		t.Fatalf("Doctor() error = %v, want OutputWrittenError", err)
+	}
+	var doctor DoctorResult
+	if decodeErr := json.Unmarshal(output.Bytes(), &doctor); decodeErr != nil {
+		t.Fatalf("decode Doctor() output: %v\n%s", decodeErr, output.String())
+	}
+	if doctor.Healthy || doctor.Errors == 0 {
+		t.Fatalf("Doctor() = %#v, want error when git is unavailable", doctor)
+	}
+	foundGitError := false
+	for _, check := range doctor.Checks {
+		if check.Name == "git" && check.Status == "error" {
+			foundGitError = true
+			break
+		}
+	}
+	if !foundGitError {
+		t.Fatalf("expected git check to have status error, checks=%#v", doctor.Checks)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "secret.json")
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := filepath.Rel(publicRoot, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Add() error = nil, want path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
+	}
+	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
+		t.Fatalf("Add() error = %v, want Windows limit error", err)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsPrivateCloneRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	longDataDir := filepath.Join(root, strings.Repeat("d", 120), strings.Repeat("e", 100))
+	if err := os.MkdirAll(longDataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	rel := "nested/secret.json"
+	target := filepath.Join(publicRoot, "nested", "secret.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	instance.Store.DataDir = longDataDir
+
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, state, err := instance.linked(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Add() error = nil, want private clone path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
+	}
+	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
+		t.Fatalf("Add() error = %v, want Windows limit error", err)
+	}
+	if !strings.Contains(err.Error(), "data") && !strings.Contains(err.Error(), "repos") {
+		t.Fatalf("Add() error = %v, want error naming private clone root %q", err, state.Private.LocalRepositoryPath)
+	}
+}
+
+func TestWindowsPathLengthPreflightRejectsSyncRemotePath(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	tempClone := filepath.Join(root, "temp-clone")
+	runGit(t, root, "clone", "-q", remote, tempClone)
+	runGit(t, tempClone, "config", "core.longpaths", "true")
+	runGit(t, tempClone, "config", "user.name", "SPAS Test")
+	runGit(t, tempClone, "config", "user.email", "spas@example.invalid")
+	longRel := filepath.Join(strings.Repeat("r", 100), strings.Repeat("s", 100), "remote.json")
+	fullTemp := filepath.Join(tempClone, longRel)
+	if err := os.MkdirAll(filepath.Dir(fullTemp), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullTemp, []byte("REMOTE=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempClone, "add", "-A")
+	runGit(t, tempClone, "commit", "-q", "-m", "add long path")
+	runGit(t, tempClone, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := instance.Sync(ctx, SyncOptions{
+		Conflict:        ConflictAbort,
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	})
+	if err == nil {
+		t.Fatal("Sync() error = nil, want path length error on Windows")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+		t.Fatalf("Sync() error = %v, kind = %v, want KindUnsupportedPath", err, kind)
+	}
+}
+
+func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	longPath := strings.Repeat("x", 100) + "/" + strings.Repeat("y", 100) + "/enrolled.json"
+	state := loadState(t, instance, publicRoot)
+	state.ManagedPaths = []string{longPath}
+	// Exercise argument resolution with an actual old diff operand. Git's
+	// long-path support is independent of SPAS's enrollment preflight.
+	runGit(t, publicRoot, "config", "core.longpaths", "true")
+	privateFile := filepath.Join(state.Private.LocalRepositoryPath, filepath.FromSlash(longPath))
+	if err := os.MkdirAll(filepath.Dir(privateFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateFile, []byte("enrolled\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+
+	err := instance.Remove(ctx, RemoveOptions{Paths: []string{longPath}})
+	if err != nil {
+		t.Fatalf("Remove() error = %v, want nil for enrolled path", err)
+	}
+
+	err = instance.Diff(ctx, DiffOptions{Paths: []string{longPath}})
+	if err != nil {
+		t.Fatalf("Diff() error = %v, want nil for enrolled path", err)
+	}
+}
+
+func TestLinuxMacAllowsPathLengthExceedingWindowsLimit(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skipf("skipping Linux/macOS long path test on Windows")
+	}
+
+	ctx := context.Background()
+	root := t.TempDir()
+	publicRoot := initializePublicRepository(t, root)
+	remote := filepath.Join(root, "private.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "secret.json")
+	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := filepath.Rel(publicRoot, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(target) < 260 {
+		t.Fatalf("len(target) = %d, want >= 260", len(target))
+	}
+
+	instance, _ := testApp(t, publicRoot, root, remote)
+	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := instance.Add(ctx, AddOptions{
+		Paths:           []string{rel},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	}); err != nil {
+		t.Fatalf("Add() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Sync(ctx, SyncOptions{
+		Conflict:        ConflictAbort,
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+		Message:         "sync long path",
+	}); err != nil {
+		t.Fatalf("Sync() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Diff(ctx, DiffOptions{Paths: []string{rel}}); err != nil {
+		t.Fatalf("Diff() error = %v, want nil on non-Windows", err)
+	}
+
+	if err := instance.Remove(ctx, RemoveOptions{Paths: []string{rel}}); err != nil {
+		t.Fatalf("Remove() error = %v, want nil on non-Windows", err)
+	}
+}
+
+func assertJSONContract(t *testing.T, output []byte, wantKeys []string) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(output, &doc); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", string(output), err)
+	}
+	gotKeys := make([]string, 0, len(doc))
+	for k := range doc {
+		gotKeys = append(gotKeys, k)
+	}
+	sort.Strings(gotKeys)
+	sortedWant := make([]string, len(wantKeys))
+	copy(sortedWant, wantKeys)
+	sort.Strings(sortedWant)
+	if !reflect.DeepEqual(gotKeys, sortedWant) {
+		t.Fatalf("JSON top-level keys = %v, want %v\npayload = %s", gotKeys, sortedWant, string(output))
+	}
+	if sv, ok := doc["schemaVersion"].(float64); !ok || int(sv) != JSONSchemaVersion {
+		t.Fatalf("schemaVersion = %v, want %d", doc["schemaVersion"], JSONSchemaVersion)
+	}
+	return doc
+}
+
+func assertNoNullArrays(t *testing.T, output []byte, arrayKeys ...string) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(output, &doc); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", string(output), err)
+	}
+	for _, k := range arrayKeys {
+		val, exists := doc[k]
+		if !exists {
+			continue
+		}
+		if val == nil {
+			t.Fatalf("key %q is null in payload: %s", k, string(output))
+		}
+		if _, ok := val.([]any); !ok {
+			t.Fatalf("key %q is not an array (%T): %s", k, val, string(output))
+		}
+	}
+}
+
+func TestJSONContractPayloadKeySets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("LinkDryRun", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		instance.JSON = true
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main", DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"action", "branch", "networkAccess", "privateRepository", "publicWorkspace", "schemaVersion", "transport",
+		})
+	})
+
+	t.Run("LinkSuccess", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		instance.JSON = true
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"linked", "networkAccess", "privateRepository", "publicWorkspace", "schemaVersion",
+		})
+	})
+
+	t.Run("AddDryRun", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(publicRoot, "dev.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Add(ctx, AddOptions{Paths: []string{"dev.json"}, DryRun: true, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"action", "added", "canceledRemovals", "localExcludeWillChange", "mergeProtection", "pendingAdds", "schemaVersion", "skippedTrackedPaths",
+		})
+		assertNoNullArrays(t, out.Bytes(), "added", "canceledRemovals", "pendingAdds", "skippedTrackedPaths")
+	})
+
+	t.Run("AddSuccess", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(publicRoot, "dev.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Add(ctx, AddOptions{Paths: []string{"dev.json"}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"added", "canceledRemovals", "pendingSync", "schemaVersion", "skippedTrackedPaths",
+		})
+		assertNoNullArrays(t, out.Bytes(), "added", "canceledRemovals", "skippedTrackedPaths")
+	})
+
+	t.Run("RemoveDryRun", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(publicRoot, "dev.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Add(ctx, AddOptions{Paths: []string{"dev.json"}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"dev.json"}, DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"action", "pendingAdds", "pendingRemovals", "refreshedRemovals", "schemaVersion", "unenrolled",
+		})
+		assertNoNullArrays(t, out.Bytes(), "pendingAdds", "pendingRemovals", "refreshedRemovals", "unenrolled")
+	})
+
+	t.Run("RemoveSuccess", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(publicRoot, "dev.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Add(ctx, AddOptions{Paths: []string{"dev.json"}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"dev.json"}}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"pendingRemovals", "pendingSync", "schemaVersion", "unenrolled",
+		})
+		assertNoNullArrays(t, out.Bytes(), "pendingRemovals", "unenrolled")
+	})
+
+	t.Run("RemoveRefresh", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"docs/ARCHITECTURE.md"}}); err != nil {
+			t.Fatal(err)
+		}
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Remove(ctx, RemoveOptions{Paths: []string{"docs/ARCHITECTURE.md"}}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"pendingRemovals", "pendingSync", "refreshedRemovals", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "pendingRemovals", "refreshedRemovals")
+	})
+
+	t.Run("SyncDryRunUninitialized", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Sync(ctx, SyncOptions{DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"action", "networkRequired", "pendingAdds", "pendingRemovals", "privateInitialized", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "pendingAdds", "pendingRemovals")
+	})
+
+	t.Run("SyncSuccessAndDryRunInitialized", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		if err := os.WriteFile(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md"), []byte("mod\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Sync(ctx, SyncOptions{DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		doc := assertJSONContract(t, out.Bytes(), []string{
+			"action", "commitApprovalRequired", "commitMessageProvided", "conflicts", "expectedPrivateHead",
+			"localChanges", "localExcludeWillChange", "mergeProtection", "networkRequired", "pendingAdds",
+			"pendingRecovery", "pendingRemovals", "privateClean", "privateHead", "privateInitialized",
+			"privateMergeInProgress", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "conflicts", "pendingAdds", "pendingRemovals", "localChanges")
+		localChanges := doc["localChanges"].([]any)
+		if len(localChanges) == 0 {
+			t.Fatal("localChanges is empty")
+		}
+		entry := localChanges[0].(map[string]any)
+		if _, hasPath := entry["path"]; !hasPath {
+			t.Fatalf("entry missing lowercase 'path': %#v", entry)
+		}
+		if _, hasStatus := entry["status"]; !hasStatus {
+			t.Fatalf("entry missing lowercase 'status': %#v", entry)
+		}
+		if _, hasUpper := entry["Path"]; hasUpper {
+			t.Fatalf("entry has PascalCase 'Path': %#v", entry)
+		}
+
+		out.Reset()
+		if err := instance.Sync(ctx, SyncOptions{Message: "update architecture"}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"managedFiles", "privateCommitCreated", "publicRemovalsStaged", "schemaVersion", "skippedConflicts", "synchronized",
+		})
+		assertNoNullArrays(t, out.Bytes(), "skippedConflicts", "publicRemovalsStaged")
+
+		out.Reset()
+		if err := instance.Sync(ctx, SyncOptions{DryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		clean := assertJSONContract(t, out.Bytes(), []string{
+			"action", "commitApprovalRequired", "commitMessageProvided", "conflicts", "expectedPrivateHead",
+			"localChanges", "localExcludeWillChange", "mergeProtection", "networkRequired", "pendingAdds",
+			"pendingRecovery", "pendingRemovals", "privateClean", "privateHead", "privateInitialized",
+			"privateMergeInProgress", "schemaVersion",
+		})
+		assertNoNullArrays(t, out.Bytes(), "conflicts", "pendingAdds", "pendingRemovals", "localChanges")
+		if changes := clean["localChanges"].([]any); len(changes) != 0 {
+			t.Fatalf("clean dry-run localChanges = %#v, want empty", changes)
+		}
+	})
+
+	t.Run("Status", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Status(ctx, StatusOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"actualPrivateHead", "exclusionFailures", "expectedPrivateHead", "linkId", "linked",
+			"managedFiles", "mergeProtection", "pathConflicts", "pendingAdds", "pendingRecovery",
+			"pendingRemovals", "privateAhead", "privateBehind", "privateBranch", "privateClean",
+			"privateCloneMissing", "privateHeadMismatch", "privateInitialized", "privateRepository",
+			"publicBranch", "schemaVersion", "workspaceMissing", "workspaceModified",
+		})
+		assertNoNullArrays(t, out.Bytes(),
+			"workspaceModified", "workspaceMissing", "privateCloneMissing",
+			"pathConflicts", "exclusionFailures", "pendingAdds", "pendingRemovals",
+		)
+
+		out.Reset()
+		if err := instance.Status(ctx, StatusOptions{ShowPaths: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"actualPrivateHead", "exclusionFailures", "expectedPrivateHead", "linkId", "linked",
+			"managedFiles", "mergeProtection", "pathConflicts", "pendingAdds", "pendingRecovery",
+			"pendingRemovals", "privateAhead", "privateBehind", "privateBranch", "privateClean",
+			"privateClone", "privateCloneMissing", "privateHeadMismatch", "privateInitialized",
+			"privateRepository", "publicBranch", "publicWorkspace", "schemaVersion",
+			"workspaceMissing", "workspaceModified",
+		})
+	})
+
+	t.Run("Diff", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Diff(ctx, DiffOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{"changedPaths", "schemaVersion"})
+		assertNoNullArrays(t, out.Bytes(), "changedPaths")
+
+		out.Reset()
+		if err := instance.Diff(ctx, DiffOptions{Staged: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{"schemaVersion", "stagedPaths"})
+		assertNoNullArrays(t, out.Bytes(), "stagedPaths")
+	})
+
+	t.Run("Doctor", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Doctor(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{"checks", "errors", "healthy", "schemaVersion", "warnings"})
+		assertNoNullArrays(t, out.Bytes(), "checks")
+	})
+
+	t.Run("UnlinkBase", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot := initializePublicRepository(t, root)
+		remote := filepath.Join(root, "remote.git")
+		instance, out := testApp(t, publicRoot, root, remote)
+		if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Unlink(ctx, UnlinkOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"keptFiles", "schemaVersion", "unlinked",
+		})
+	})
+
+	t.Run("UnlinkWithVisibleFiles", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Unlink(ctx, UnlinkOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"keptFiles", "schemaVersion", "unlinked", "workspaceFilesNowVisibleToPublicGit",
+		})
+		assertNoNullArrays(t, out.Bytes(), "workspaceFilesNowVisibleToPublicGit")
+	})
+
+	t.Run("UnlinkPrivateCloneCleanup", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		_, _, instance := initializedApp(t, root)
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Unlink(ctx, UnlinkOptions{RemovePrivateClone: true}); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"keptFiles", "privateCloneRemoved", "schemaVersion", "unlinked", "workspaceFilesNowVisibleToPublicGit",
+		})
+		assertNoNullArrays(t, out.Bytes(), "workspaceFilesNowVisibleToPublicGit")
+	})
+
+	t.Run("SyncAbort", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot, remote, instance := initializedApp(t, root)
+		localFile := filepath.Join(publicRoot, "docs", "ARCHITECTURE.md")
+		if err := os.WriteFile(localFile, []byte("local change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(root, "other-abort")
+		runGit(t, root, "clone", "-q", remote, other)
+		runGit(t, other, "config", "user.name", "Other Test")
+		runGit(t, other, "config", "user.email", "other@example.invalid")
+		if err := os.WriteFile(filepath.Join(other, "docs", "ARCHITECTURE.md"), []byte("remote change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, other, "add", "docs/ARCHITECTURE.md")
+		runGit(t, other, "commit", "-q", "-m", "remote conflict")
+		runGit(t, other, "push", "-q", "origin", "main")
+
+		err := instance.Sync(ctx, SyncOptions{
+			Message:         "Local conflicting change",
+			Conflict:        ConflictAbort,
+			ExistingExclude: ExcludePreserve,
+			MergeProtection: MergeEnable,
+		})
+		if !errors.Is(err, ErrPrivateMergeConflict) {
+			t.Fatalf("Sync() error = %v, want ErrPrivateMergeConflict", err)
+		}
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Sync(ctx, SyncOptions{Abort: true}); err != nil {
+			t.Fatalf("Sync(abort) error = %v", err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"deferredPaths", "mergeAborted", "recoveryCopies", "schemaVersion", "skippedPublicPaths",
+		})
+		assertNoNullArrays(t, out.Bytes(), "deferredPaths", "skippedPublicPaths")
+	})
+
+	t.Run("SyncContinue", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		publicRoot, remote, instance := initializedApp(t, root)
+		localFile := filepath.Join(publicRoot, "docs", "ARCHITECTURE.md")
+		if err := os.WriteFile(localFile, []byte("local change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(root, "other-continue")
+		runGit(t, root, "clone", "-q", remote, other)
+		runGit(t, other, "config", "user.name", "Other Test")
+		runGit(t, other, "config", "user.email", "other@example.invalid")
+		if err := os.WriteFile(filepath.Join(other, "docs", "ARCHITECTURE.md"), []byte("remote change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, other, "add", "docs/ARCHITECTURE.md")
+		runGit(t, other, "commit", "-q", "-m", "remote conflict")
+		runGit(t, other, "push", "-q", "origin", "main")
+
+		err := instance.Sync(ctx, SyncOptions{
+			Message:         "Local conflicting change",
+			Conflict:        ConflictAbort,
+			ExistingExclude: ExcludePreserve,
+			MergeProtection: MergeEnable,
+		})
+		if !errors.Is(err, ErrPrivateMergeConflict) {
+			t.Fatalf("Sync() error = %v, want ErrPrivateMergeConflict", err)
+		}
+		if err := os.WriteFile(localFile, []byte("resolved architecture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := instance.Out.(*bytes.Buffer)
+		out.Reset()
+		instance.JSON = true
+		if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "resolve conflict"}); err != nil {
+			t.Fatalf("Sync(continue) error = %v", err)
+		}
+		assertJSONContract(t, out.Bytes(), []string{
+			"mergeContinued", "schemaVersion", "synchronized",
+		})
+	})
 }

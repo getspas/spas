@@ -177,6 +177,121 @@ func TestCheckedManagedMutationsHonorAbsentDestination(t *testing.T) {
 	}
 }
 
+func TestCopyManagedInheritsCheckoutPermissions(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "plain"), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "tool"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Control entries record what the current umask leaves of the maximal
+	// modes without mutating the process-global umask in a parallel test.
+	controlRoot := t.TempDir()
+	control := func(name string, mode os.FileMode) os.FileMode {
+		t.Helper()
+		file, err := os.OpenFile(filepath.Join(controlRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := file.Stat()
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Mode().Perm()
+	}
+	wantPlain := control("plain", 0o666)
+	wantExec := control("tool", 0o777)
+	if err := os.Mkdir(filepath.Join(controlRoot, "dir"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, err := os.Stat(filepath.Join(controlRoot, "dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := dirInfo.Mode().Perm()
+
+	if err := CopyManaged(sourceRoot, "plain", destinationRoot, "plain"); err != nil {
+		t.Fatalf("CopyManaged(plain) error = %v", err)
+	}
+	if err := CopyManaged(sourceRoot, "tool", destinationRoot, "nested/tool"); err != nil {
+		t.Fatalf("CopyManaged(tool) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		path string
+		want os.FileMode
+	}{
+		{"plain", wantPlain},
+		{filepath.Join("nested", "tool"), wantExec},
+		{"nested", wantDir},
+	} {
+		info, err := os.Stat(filepath.Join(destinationRoot, test.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != test.want {
+			t.Errorf("%s mode = %o, want %o", test.path, got, test.want)
+		}
+	}
+}
+
+func TestCopyManagedOwnerOnlyKeepsCopiesPrivate(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "plain"), []byte("private"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyManagedOwnerOnly(sourceRoot, "plain", destinationRoot, "plain"); err != nil {
+		t.Fatalf("CopyManagedOwnerOnly(plain) error = %v", err)
+	}
+	if err := CopyManagedOwnerOnly(sourceRoot, "tool", destinationRoot, "nested/tool"); err != nil {
+		t.Fatalf("CopyManagedOwnerOnly(tool) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		path string
+		want os.FileMode
+	}{
+		{"plain", 0o600},
+		{filepath.Join("nested", "tool"), 0o700},
+	} {
+		info, err := os.Stat(filepath.Join(destinationRoot, test.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != test.want {
+			t.Errorf("%s mode = %o, want %o", test.path, got, test.want)
+		}
+	}
+	info, err := os.Stat(filepath.Join(destinationRoot, "nested"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got&0o077 != 0 {
+		t.Errorf("nested directory mode = %o, want no group/other access", got)
+	}
+}
+
 func TestCopyManagedCleansRecognizedOrphanedTemporaryFile(t *testing.T) {
 	t.Parallel()
 

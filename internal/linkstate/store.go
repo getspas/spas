@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/getspas/spas/internal/atomicfile"
+	"github.com/getspas/spas/internal/limits"
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/provider"
 )
@@ -62,6 +63,7 @@ type Private struct {
 	ExpectedHead        string               `json:"expectedHead,omitempty"`
 	Initialization      *CloneInitialization `json:"initialization,omitempty"`
 	RemoteEmpty         bool                 `json:"remoteEmpty,omitempty"`
+	PublicApproved      bool                 `json:"publicApproved,omitempty"`
 }
 
 type CloneInitialization struct {
@@ -256,7 +258,7 @@ func (s Store) Load(publicRoot, commonDir string) (State, error) {
 	if state.SchemaVersion != SchemaVersion {
 		return State{}, fmt.Errorf("unsupported link-state schema %d", state.SchemaVersion)
 	}
-	if err := validate(state, s); err != nil {
+	if err := s.Validate(state); err != nil {
 		return State{}, err
 	}
 	if filepath.Clean(state.Public.Root) != filepath.Clean(publicRoot) ||
@@ -264,6 +266,11 @@ func (s Store) Load(publicRoot, commonDir string) (State, error) {
 		return State{}, fmt.Errorf("link state does not match this public workspace")
 	}
 	return state, nil
+}
+
+// Validate checks whether state can be stored and used by SPAS.
+func (s Store) Validate(state State) error {
+	return validate(state, s)
 }
 
 func privatePath(dataDir, linkID, repository string, transport provider.Transport) string {
@@ -276,7 +283,7 @@ func (s Store) Save(state State) error {
 	if state.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("refuse to save unsupported link-state schema %d", state.SchemaVersion)
 	}
-	if err := validate(state, s); err != nil {
+	if err := s.Validate(state); err != nil {
 		return err
 	}
 	sort.Strings(state.PendingAdds)
@@ -488,6 +495,45 @@ func validate(state State, store Store) error {
 				return fmt.Errorf("link state contains invalid managed path %q: %w", value, err)
 			}
 		}
+	}
+	if err := validatePrivatePathLimit("managed and pending state", state.ManagedPaths, state.PendingAdds); err != nil {
+		return err
+	}
+	if state.ActiveMerge != nil {
+		if err := validatePrivatePathLimit(
+			"active merge state",
+			state.ActiveMerge.MaterializationPaths,
+			state.ActiveMerge.RemainingPendingAdds,
+		); err != nil {
+			return err
+		}
+	}
+	if state.Materializing != nil {
+		if err := validatePrivatePathLimit(
+			"materialization state",
+			state.Materializing.FinalPaths,
+			state.Materializing.RemainingPendingAdds,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePrivatePathLimit(label string, groups ...[]string) error {
+	paths := make(map[string]struct{})
+	for _, group := range groups {
+		for _, path := range group {
+			paths[path] = struct{}{}
+		}
+	}
+	if len(paths) > limits.MaxPrivateTreeEntries {
+		return fmt.Errorf(
+			"link state %s contains %d private paths; supported limit is %d",
+			label,
+			len(paths),
+			limits.MaxPrivateTreeEntries,
+		)
 	}
 	return nil
 }

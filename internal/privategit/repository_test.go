@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/limits"
@@ -471,6 +472,18 @@ func TestValidateBranchNameRejectsPreviousCheckoutExpression(t *testing.T) {
 		t.Fatal("ValidateBranchName(@{-1}) error = nil, want previous-checkout expression rejection")
 	}
 }
+func TestValidateBranchNameCancellation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := ValidateBranchName(canceledCtx, gitexec.Runner{}, root, "main")
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateBranchName(canceled) error = %v, want context.Canceled", err)
+	}
+}
 
 func TestHeadRejectsNonCommitRef(t *testing.T) {
 	t.Parallel()
@@ -768,6 +781,41 @@ func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
 	}
 }
 
+func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "user.name", "SPAS Test")
+	runGit(t, root, "config", "user.email", "spas@example.invalid")
+	first := hashBlob(t, root, "first")
+	longPath := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/deep.json"
+	runGit(t, root, "update-index", "--add", "--cacheinfo", "100644,"+first+","+longPath)
+	runGit(t, root, "commit", "-q", "-m", "long path commit")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(t.TempDir(), "safety"),
+	}
+	err := repository.ValidateTree(context.Background(), "HEAD")
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Fatal("ValidateTree() error = nil on Windows, want path length error")
+		}
+		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
+			t.Fatalf("ValidateTree() error kind = %v, want KindUnsupportedPath", kind)
+		}
+		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
+			t.Fatalf("ValidateTree() error = %v, want Windows limit error", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("ValidateTree() error = %v on %s, want nil", err, runtime.GOOS)
+		}
+	}
+}
+
 func TestVerifyOriginRejectsPushURLAndMultipleOrigins(t *testing.T) {
 	t.Parallel()
 
@@ -887,7 +935,8 @@ func TestStageTreatsSpecialCharactersAsLiteralPaths(t *testing.T) {
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, args...); err != nil {
+	cmdArgs := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
+	if _, err := (gitexec.Runner{}).Run(context.Background(), dir, cmdArgs...); err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
 }
@@ -1243,5 +1292,119 @@ func TestCommitPreservesCommentPrefixedReason(t *testing.T) {
 	}
 	if got := strings.TrimSpace(gitOutput(t, root, "log", "-1", "--format=%B")); got != reason {
 		t.Fatalf("commit reason = %q, want %q", got, reason)
+	}
+}
+
+func TestCommitNeutralizesGPGSigning(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "user.name", "SPAS Test")
+	runGit(t, root, "config", "user.email", "spas@example.invalid")
+	runGit(t, root, "config", "--local", "commit.gpgsign", "true")
+	runGit(t, root, "config", "--local", "tag.gpgsign", "true")
+	runGit(t, root, "config", "--local", "gpg.program", filepath.Join(root, "missing-gpg"))
+	if err := os.WriteFile(filepath.Join(root, "private.txt"), []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "private.txt")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety"),
+	}
+	if err := repository.prepareSafetyFiles(); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "commit with gpgsign neutralized"
+	if err := repository.Commit(ctx, reason); err != nil {
+		t.Fatalf("Commit() error = %v, want successful commit with neutralized gpgsign", err)
+	}
+	if got := strings.TrimSpace(gitOutput(t, root, "log", "-1", "--format=%B")); got != reason {
+		t.Fatalf("commit reason = %q, want %q", got, reason)
+	}
+}
+
+func TestEnsureSafetyConfiguresSigningSettings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGit(t, root, "config", "--local", "commit.gpgsign", "true")
+	runGit(t, root, "config", "--local", "tag.gpgsign", "true")
+
+	repository := Repository{
+		Path:      root,
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety"),
+	}
+	if err := repository.EnsureSafety(ctx); err != nil {
+		t.Fatalf("EnsureSafety() error = %v", err)
+	}
+	for _, key := range []string{"commit.gpgsign", "tag.gpgsign", "core.autocrlf", "core.fsmonitor"} {
+		result, err := repository.Git.Run(ctx, root, "config", "--local", "--get", key)
+		if err != nil {
+			t.Fatalf("read %s: %v", key, err)
+		}
+		if got := strings.TrimSpace(string(result.Stdout)); got != "false" {
+			t.Fatalf("%s = %q, want false", key, got)
+		}
+	}
+}
+
+func TestNetworkOperationsReturnAuthNetworkOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	runGit(t, root, "init", "--bare", "-q", remote)
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer cancel()
+
+	repo := Repository{
+		Path:      filepath.Join(root, "clone1"),
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety1"),
+	}
+
+	// PrepareClone on remote with timeout wraps in KindAuthNetwork
+	_, err := repo.PrepareClone(timeoutCtx, remote, "main")
+	if err == nil {
+		t.Fatal("PrepareClone() error = nil, want timeout error")
+	}
+	kind, ok := spaserr.KindOf(err)
+	if !ok || kind != spaserr.KindAuthNetwork {
+		t.Fatalf("PrepareClone() error kind = %v, want KindAuthNetwork; err = %v", kind, err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("PrepareClone() error = %v, want context deadline exceeded", err)
+	}
+
+	repoNormal := Repository{
+		Path:      filepath.Join(root, "clone2"),
+		Git:       gitexec.Runner{},
+		SafetyDir: filepath.Join(root, "safety2"),
+	}
+	publishCloneForTest(t, repoNormal, ctx, remote, "main")
+
+	// If branch validation itself fails due to canceled/timed out context, it returns the context error.
+	if err := repoNormal.ValidateBranch(timeoutCtx, "main"); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ValidateBranch(timeout) = %v, want context.DeadlineExceeded", err)
+	}
+
+	// RemoteBranchExists with valid branch but timeout on network ls-remote
+	_, err = repoNormal.RemoteBranchExists(timeoutCtx, "main")
+	if err == nil {
+		t.Fatal("RemoteBranchExists() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RemoteBranchExists() error = %v, want context.DeadlineExceeded", err)
 	}
 }

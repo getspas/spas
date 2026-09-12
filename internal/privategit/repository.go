@@ -87,6 +87,8 @@ func (r Repository) PrepareClone(ctx context.Context, remoteURL, requestedBranch
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
+		"-c", "commit.gpgsign=false",
+		"-c", "tag.gpgsign=false",
 		"clone", "--no-checkout", "--origin", "origin", "--", remoteURL, staging,
 	}
 	if _, err := r.Git.RunStreaming(ctx, parent, cloneArgs...); err != nil {
@@ -531,46 +533,14 @@ func (r Repository) TreePaths(ctx context.Context, revision string) ([]pathmodel
 	return paths, nil
 }
 
-func (r Repository) ChangedPaths(ctx context.Context) ([]ChangedPath, error) {
-	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("diff", "--cached", "--name-status", "-z")...)
+func (r Repository) StagedPaths(ctx context.Context) ([]pathmodel.Path, error) {
+	// Selection is per path: a rename exposes both the deleted source and the
+	// added destination, independently of Git's rename-detection heuristics.
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("diff", "--cached", "--no-renames", "--name-only", "-z")...)
 	if err != nil {
 		return nil, fmt.Errorf("list staged private changes: %w", err)
 	}
-	fields := bytes.Split(result.Stdout, []byte{0})
-	var changes []ChangedPath
-	for index := 0; index < len(fields); {
-		if len(fields[index]) == 0 {
-			index++
-			continue
-		}
-		status := string(fields[index])
-		index++
-		if index >= len(fields) {
-			return nil, fmt.Errorf("parse staged private changes: missing path")
-		}
-		path, err := pathmodel.Parse(string(fields[index]))
-		if err != nil {
-			return nil, err
-		}
-		index++
-		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
-			if index >= len(fields) {
-				return nil, fmt.Errorf("parse staged private rename: missing destination")
-			}
-			path, err = pathmodel.Parse(string(fields[index]))
-			if err != nil {
-				return nil, err
-			}
-			index++
-		}
-		changes = append(changes, ChangedPath{Status: status[:1], Path: path})
-	}
-	return changes, nil
-}
-
-type ChangedPath struct {
-	Status string         `json:"status"`
-	Path   pathmodel.Path `json:"path"`
+	return parsePaths(result.Stdout)
 }
 
 // StreamStagedDiff writes staged changes without retaining the complete diff
@@ -702,7 +672,10 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 	}
 	refResult, refErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "HEAD")...)
 	if refErr == nil {
-		ref := strings.TrimSpace(string(refResult.Stdout))
+		ref, err := gitexec.ParseRefOutput(refResult.Stdout, "")
+		if err != nil {
+			return "", err
+		}
 		_, existsErr := r.Git.Run(ctx, r.Path, r.safeArgs("show-ref", "--verify", "--quiet", ref)...)
 		if existsErr == nil {
 			return "", fmt.Errorf("private HEAD ref %q does not name a commit", ref)
@@ -718,14 +691,14 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 }
 
 func (r Repository) Branch(ctx context.Context) (string, error) {
-	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "--short", "HEAD")...)
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "HEAD")...)
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
 			return "", nil
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	return gitexec.ParseRefOutput(result.Stdout, "refs/heads/")
 }
 
 func (r Repository) MergeInProgress() (bool, error) {
@@ -880,7 +853,14 @@ func ValidateBranchName(ctx context.Context, git gitexec.Runner, workingDirector
 		return fmt.Errorf("private branch is required")
 	}
 	result, err := git.Run(ctx, workingDirectory, "check-ref-format", "--branch", branch)
-	if err != nil || strings.TrimSpace(string(result.Stdout)) != branch {
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("invalid private branch %q", branch)
+	}
+	literal, err := gitexec.ParseRefOutput(result.Stdout, "")
+	if err != nil || literal != branch {
 		return fmt.Errorf("invalid private branch %q", branch)
 	}
 	return nil
@@ -918,6 +898,9 @@ func (r Repository) ValidateTree(ctx context.Context, revision string) error {
 	for _, entry := range entries {
 		if (entry.Mode != "100644" && entry.Mode != "100755") || entry.Type != "blob" {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("private path %q uses unsupported Git mode %s", entry.Path, entry.Mode))
+		}
+		if err := pathmodel.ValidatePathLength(r.Path, entry.Path); err != nil {
+			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 		if err := ValidateManagedPath(entry.Path); err != nil {
 			return err
@@ -1047,12 +1030,16 @@ func (r Repository) resolveInitialBranch(ctx context.Context, requested string) 
 		return "", false, err
 	}
 	var branches []string
-	for _, line := range strings.Split(strings.TrimSpace(string(result.Stdout)), "\n") {
-		if line == "" || line == "refs/remotes/origin/HEAD" {
+	for line := range strings.SplitAfterSeq(string(result.Stdout), "\n") {
+		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "refs/remotes/origin/") {
-			branches = append(branches, strings.TrimPrefix(line, "refs/remotes/origin/"))
+		branch, err := gitexec.ParseRefOutput([]byte(line), "refs/remotes/origin/")
+		if err != nil {
+			return "", false, err
+		}
+		if branch != "HEAD" {
+			branches = append(branches, branch)
 		}
 	}
 	sort.Strings(branches)
@@ -1068,15 +1055,15 @@ func (r Repository) resolveInitialBranch(ctx context.Context, requested string) 
 		return "", false, fmt.Errorf("private branch %q does not exist", requested)
 	}
 
-	defaultResult, defaultErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")...)
+	defaultResult, defaultErr := r.Git.Run(ctx, r.Path, r.safeArgs("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")...)
 	if defaultErr != nil {
 		return "", false, ErrDefaultBranch
 	}
-	value := strings.TrimSpace(string(defaultResult.Stdout))
-	if !strings.HasPrefix(value, "origin/") {
+	branch, err := gitexec.ParseRefOutput(defaultResult.Stdout, "refs/remotes/origin/")
+	if err != nil {
 		return "", false, ErrDefaultBranch
 	}
-	return strings.TrimPrefix(value, "origin/"), false, nil
+	return branch, false, nil
 }
 
 func (r Repository) verifyPreparedResult(ctx context.Context, expected InitResult) error {
@@ -1118,6 +1105,8 @@ func (r Repository) verifySafetyConfig(ctx context.Context) error {
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
+		{"commit.gpgsign", "false"},
+		{"tag.gpgsign", "false"},
 	}
 	for _, setting := range settings {
 		result, err := r.Git.Run(ctx, r.Path, "config", "--local", "--get", setting[0])
@@ -1147,6 +1136,8 @@ func (r Repository) applySafetyConfig(ctx context.Context) error {
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
+		{"commit.gpgsign", "false"},
+		{"tag.gpgsign", "false"},
 	}
 	for _, setting := range settings {
 		if _, err := r.Git.Run(ctx, r.Path, "config", "--local", setting[0], setting[1]); err != nil {
@@ -1217,7 +1208,11 @@ func (r Repository) verifyLayout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve private clone working tree: %w", err)
 	}
-	if same, err := sameFilesystemObject(r.Path, strings.TrimSpace(string(topResult.Stdout))); err != nil {
+	topPath, err := gitexec.ParsePathOutput(topResult.Stdout)
+	if err != nil {
+		return fmt.Errorf("parse private clone working tree: %w", err)
+	}
+	if same, err := sameFilesystemObject(r.Path, topPath); err != nil {
 		return fmt.Errorf("verify private clone working tree: %w", err)
 	} else if !same {
 		return fmt.Errorf("private clone working tree was redirected outside SPAS storage")
@@ -1227,7 +1222,11 @@ func (r Repository) verifyLayout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve private clone Git directory: %w", err)
 	}
-	if same, err := sameFilesystemObject(expectedGitDir, strings.TrimSpace(string(gitDirResult.Stdout))); err != nil {
+	gitDirPath, err := gitexec.ParsePathOutput(gitDirResult.Stdout)
+	if err != nil {
+		return fmt.Errorf("parse private clone Git directory: %w", err)
+	}
+	if same, err := sameFilesystemObject(expectedGitDir, gitDirPath); err != nil {
 		return fmt.Errorf("verify private clone Git directory: %w", err)
 	} else if !same {
 		return fmt.Errorf("private clone Git metadata was redirected outside SPAS storage")
@@ -1365,6 +1364,8 @@ func (r Repository) safeArgs(args ...string) []string {
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
+		"-c", "commit.gpgsign=false",
+		"-c", "tag.gpgsign=false",
 	}
 	return append(prefix, args...)
 }

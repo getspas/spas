@@ -131,6 +131,8 @@ func testRepository(t *testing.T) publicgit.Repository {
 	runGit(t, root, "init", "-q", "-b", "main")
 	runGit(t, root, "config", "user.name", "SPAS Test")
 	runGit(t, root, "config", "user.email", "spas@example.invalid")
+	runGit(t, root, "config", "commit.gpgsign", "false")
+	runGit(t, root, "config", "tag.gpgsign", "false")
 	runGit(t, root, "commit", "--allow-empty", "-q", "-m", "initial")
 	repository, err := publicgit.Discover(context.Background(), gitexec.Runner{}, root)
 	if err != nil {

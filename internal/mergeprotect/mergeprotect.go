@@ -18,8 +18,8 @@ type Status struct {
 	Enabled bool   `json:"enabled"`
 	Value   string `json:"value,omitempty"`
 	Present bool   `json:"present,omitempty"`
-	// Ambiguous reports that the branch carries multiple mergeOptions values.
-	// SPAS never rewrites such configuration automatically.
+	// Ambiguous reports multiple or inherited values, or options whose effect
+	// SPAS cannot verify. These require manual configuration.
 	Ambiguous bool `json:"ambiguous,omitempty"`
 }
 
@@ -31,20 +31,43 @@ func Inspect(ctx context.Context, repository publicgit.Repository) (Status, erro
 	if branch == "" {
 		return Status{}, nil
 	}
-	values, present, err := read(repository.Git, ctx, repository.Root, branch)
+	options, err := readEffectiveOptions(repository.Git, ctx, repository.Root, branch)
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{Branch: branch, Value: strings.Join(values, "\n"), Present: present}
-	if present {
-		for _, value := range values {
-			if contains(value, requiredOption) {
-				status.Enabled = true
-			}
-		}
+	values := make([]string, len(options))
+	for i, option := range options {
+		values[i] = option.value
 	}
-	if len(values) > 1 {
+	status := Status{Branch: branch, Value: strings.Join(values, "\n"), Present: len(options) > 0}
+	if len(options) == 0 {
+		return status, nil
+	}
+	if len(options) != 1 || options[0].scope != "local" {
 		status.Ambiguous = true
+		return status, nil
+	}
+	direct, present, err := read(repository.Git, ctx, repository.Root, branch)
+	if err != nil {
+		return Status{}, err
+	}
+	if !present || len(direct) != 1 || direct[0] != values[0] {
+		status.Ambiguous = true
+		return status, nil
+	}
+	// Verify exact operand-free flags using Git's ASCII whitespace separators.
+	for _, option := range strings.FieldsFunc(values[0], func(r rune) bool {
+		return strings.ContainsRune(" \t\r\n\v\f", r)
+	}) {
+		switch option {
+		case requiredOption:
+			status.Enabled = true
+		case "--no-edit", "--log", "--no-ff":
+		default:
+			status.Enabled = false
+			status.Ambiguous = true
+			return status, nil
+		}
 	}
 	return status, nil
 }
@@ -61,7 +84,7 @@ func Enable(ctx context.Context, repository publicgit.Repository, state *linksta
 		return status, spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("cannot configure merge protection in detached HEAD state"))
 	}
 	if status.Ambiguous {
-		return status, spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("cannot configure merge protection when the branch has multiple mergeOptions values"))
+		return status, PolicyError(status)
 	}
 
 	before := status.Value
@@ -193,7 +216,7 @@ func PolicyError(status Status) error {
 	if status.Ambiguous {
 		return spaserr.Wrap(
 			spaserr.KindUnsafeGitState,
-			fmt.Errorf("public branch %q has multiple mergeOptions values; add %s manually before retrying", status.Branch, requiredOption),
+			fmt.Errorf("public branch %q has unverifiable mergeOptions; configure one direct repository-local value using supported flags and %s", status.Branch, requiredOption),
 		)
 	}
 	return spaserr.Wrap(
@@ -204,25 +227,41 @@ func PolicyError(status Status) error {
 
 func read(git gitexec.Runner, ctx context.Context, root, branch string) ([]string, bool, error) {
 	key := "branch." + branch + ".mergeOptions"
-	result, err := git.Run(ctx, root, "config", "--local", "--get-all", key)
+	result, err := git.Run(ctx, root, "config", "--local", "--no-includes", "--null", "--get-all", key)
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
-	raw := strings.TrimSpace(string(result.Stdout))
-	if raw == "" {
-		return []string{""}, true, nil
+	raw, terminated := strings.CutSuffix(string(result.Stdout), "\x00")
+	if !terminated {
+		return nil, false, fmt.Errorf("Git returned malformed mergeOptions values")
 	}
-	return strings.Split(raw, "\n"), true, nil
+	return strings.Split(raw, "\x00"), true, nil
 }
 
-func contains(value, option string) bool {
-	for _, field := range strings.Fields(value) {
-		if field == option {
-			return true
+type scopedOption struct {
+	scope string
+	value string
+}
+
+func readEffectiveOptions(git gitexec.Runner, ctx context.Context, root, branch string) ([]scopedOption, error) {
+	result, err := git.Run(ctx, root, "config", "--null", "--show-scope", "--get-all", "branch."+branch+".mergeOptions")
+	if err != nil {
+		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
+			return nil, nil
 		}
+		return nil, err
 	}
-	return false
+	raw, terminated := strings.CutSuffix(string(result.Stdout), "\x00")
+	fields := strings.Split(raw, "\x00")
+	if !terminated || len(fields)%2 != 0 {
+		return nil, fmt.Errorf("Git returned malformed scoped mergeOptions values")
+	}
+	options := make([]scopedOption, 0, len(fields)/2)
+	for i := 0; i < len(fields); i += 2 {
+		options = append(options, scopedOption{scope: fields[i], value: fields[i+1]})
+	}
+	return options, nil
 }

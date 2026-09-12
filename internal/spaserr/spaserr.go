@@ -53,7 +53,7 @@ func (k Kind) Code() string {
 	case KindMergeConflict:
 		return "private_merge_conflict"
 	case KindAuthNetwork:
-		return "github_auth_or_network"
+		return "auth_or_network"
 	case KindUnsafeGitState:
 		return "unsafe_git_state"
 	case KindExclusionValidation:

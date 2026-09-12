@@ -57,7 +57,7 @@ func Detect(public, private []pathmodel.Path, ignoreCase bool) []Collision {
 		return publicEntries[i].canonical < publicEntries[j].canonical
 	})
 
-	var result []Collision
+	result := []Collision{}
 	for _, privatePath := range private {
 		privateCanonical := pathmodel.Canonical(privatePath, ignoreCase)
 		for _, publicPath := range publicExact[privateCanonical] {

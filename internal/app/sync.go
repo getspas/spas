@@ -58,8 +58,8 @@ type SyncOptions struct {
 var ErrPrivateMergeConflict = errors.New("private merge conflict")
 
 type plannedChange struct {
-	Path   pathmodel.Path
-	Status string
+	Path   pathmodel.Path `json:"path"`
+	Status string         `json:"status"`
 }
 
 type fileSnapshot struct {
@@ -129,29 +129,39 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		return err
 	}
 
-	if !options.AllowPublic && a.Provider != nil {
-		ref := provider.RepositoryRef{
-			Provider:  state.Private.Provider,
-			Canonical: state.Private.Repository,
-			Transport: state.Private.Transport,
-			RemoteURL: state.Private.RemoteURL,
-		}
-		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
-		if probeErr != nil {
-			return probeErr
-		}
-		if isPublic {
-			approved, err := a.Prompt.Confirm(
-				ctx,
-				fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
-				false,
-				false,
-			)
-			if err != nil {
-				return err
+	if !state.Private.PublicApproved && a.Provider != nil {
+		approvedThisRun := options.AllowPublic
+		if !options.AllowPublic {
+			ref := provider.RepositoryRef{
+				Provider:  state.Private.Provider,
+				Canonical: state.Private.Repository,
+				Transport: state.Private.Transport,
+				RemoteURL: state.Private.RemoteURL,
 			}
-			if !approved {
-				return fmt.Errorf("syncing to publicly readable repository declined")
+			isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
+			if probeErr != nil {
+				return probeErr
+			}
+			if isPublic {
+				approved, err := a.Prompt.Confirm(
+					ctx,
+					fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
+					false,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				if !approved {
+					return fmt.Errorf("syncing to publicly readable repository declined")
+				}
+				approvedThisRun = true
+			}
+		}
+		if approvedThisRun {
+			state.Private.PublicApproved = true
+			if err := a.Store.Save(state); err != nil {
+				return err
 			}
 		}
 	}
@@ -265,6 +275,14 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	candidatePrivate := unionPaths(localCandidate, remotePrivatePaths)
 	if err := validateProspectivePrivateTreeSize(candidatePrivate); err != nil {
 		return err
+	}
+	for _, path := range candidatePrivate {
+		if err := pathmodel.ValidatePathLength(repository.Root, path); err != nil {
+			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
+		if err := pathmodel.ValidatePathLength(private.Path, path); err != nil {
+			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
 	}
 	// groupByCanonical supports the case-only override's ambiguity check.
 
@@ -575,6 +593,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	rollbackNeeded = false
 
 	var finalPaths []pathmodel.Path
+	var finalExclude []pathmodel.Path
 	materializeSkip := unionSets(skipped, deferred)
 	finalPendingAdds := retainStrings(
 		state.PendingAdds,
@@ -764,7 +783,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if err := verifyOwnershipApprovals(ctx, repository, overridePublic, overrideStatuses, overrideSnapshots); err != nil {
 			return err
 		}
-		finalExclude := unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
+		finalExclude = unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
 		recoveryPaths := filterRecoveryPaths(
 			unionPaths(mapPathValues(obstructionOverrides), mapPathValues(overridePublic)),
 			finalPaths,
@@ -823,7 +842,6 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 
 	// The exclude block is written and proven effective before any private
 	// content reaches the public working tree.
-	finalExclude := unionPaths(filterSkipped(finalPaths, skipped), plan.DeferredAdds)
 	finalExcludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, finalExclude)
 	if err != nil {
 		return err
@@ -1109,7 +1127,7 @@ func (a App) syncDryRun(
 			"action":             "sync",
 			"networkRequired":    true,
 			"privateInitialized": false,
-			"pendingAdds":        state.PendingAdds,
+			"pendingAdds":        append([]string{}, state.PendingAdds...),
 			"pendingRemovals":    state.PendingRemovalPaths(),
 		})
 	}
@@ -1212,11 +1230,11 @@ func (a App) syncDryRun(
 		"privateClean":           clean,
 		"privateMergeInProgress": mergeInProgress,
 		"pendingRecovery":        state.Materializing != nil || state.ActiveMerge != nil,
-		"localChanges":           plan.Changes,
+		"localChanges":           append([]plannedChange{}, plan.Changes...),
 		"commitApprovalRequired": len(plan.Changes) > 0,
 		"commitMessageProvided":  strings.TrimSpace(options.Message) != "",
 		"conflicts":              conflicts,
-		"pendingAdds":            state.PendingAdds,
+		"pendingAdds":            append([]string{}, state.PendingAdds...),
 		"pendingRemovals":        state.PendingRemovalPaths(),
 		"localExcludeWillChange": excludePlan.Changed,
 		"mergeProtection":        mergeStatus,
@@ -3186,6 +3204,12 @@ func planLocalChanges(
 		if _, skip := skipped[value]; skip {
 			continue
 		}
+		if err := pathmodel.ValidatePathLength(publicRoot, path); err != nil {
+			return localChangePlan{}, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
+		if err := pathmodel.ValidatePathLength(privateRoot, path); err != nil {
+			return localChangePlan{}, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
 		publicPath := path.OSPath(publicRoot)
 		snapshot, err := snapshotFile(publicPath)
 		if err != nil {
@@ -3217,7 +3241,7 @@ func planLocalChanges(
 			continue
 		}
 		if !existed {
-			if isPending && !isManaged {
+			if !isManaged {
 				// The enrolled file is temporarily missing; keep the
 				// enrollment and its exclusion instead of dropping them.
 				plan.DeferredAdds = append(plan.DeferredAdds, path)
@@ -3465,8 +3489,7 @@ func caseRenamePreRemovals(
 			return nil, nil, err
 		}
 		canonical := pathmodel.Canonical(path, true)
-		final, found := finalByCanonical[canonical]
-		if !found || final == path {
+		if _, found := finalByCanonical[canonical]; !found {
 			continue
 		}
 		result = append(result, path)

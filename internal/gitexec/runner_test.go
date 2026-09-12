@@ -230,6 +230,69 @@ func TestRunStreamingForwardsAllOutputAndRetainsFixedTail(t *testing.T) {
 	}
 }
 
+func TestNonInteractiveStreamingDoesNotInheritStdin(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	var streamed bytes.Buffer
+	result, err := (Runner{
+		Path:           os.Args[0],
+		NonInteractive: true,
+		Stdin:          strings.NewReader("inherited input"),
+		Stdout:         &streamed,
+	}).RunStreaming(
+		context.Background(),
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunStreaming() error = %v", err)
+	}
+	if streamed.Len() != 0 || len(result.Stdout) != 0 {
+		t.Fatalf("RunStreaming() stdout = %q, want no inherited stdin", streamed.String())
+	}
+}
+
+func TestInteractiveStreamingUsesConfiguredStdin(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	var streamed bytes.Buffer
+	_, err := (Runner{
+		Path:   os.Args[0],
+		Stdin:  strings.NewReader("interactive input"),
+		Stdout: &streamed,
+	}).RunStreaming(
+		context.Background(),
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunStreaming() error = %v", err)
+	}
+	if got := streamed.String(); got != "interactive input" {
+		t.Fatalf("RunStreaming() stdout = %q, want configured stdin", got)
+	}
+}
+
+func TestNonInteractiveRunInputUsesExplicitInput(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "copy-stdin")
+
+	result, err := (Runner{
+		Path:           os.Args[0],
+		NonInteractive: true,
+	}).RunInput(
+		context.Background(),
+		t.TempDir(),
+		strings.NewReader("explicit input"),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err != nil {
+		t.Fatalf("RunInput() error = %v", err)
+	}
+	if got := string(result.Stdout); got != "explicit input" {
+		t.Fatalf("RunInput() stdout = %q, want explicit input", got)
+	}
+}
+
 func TestTailBufferRetainsExactSuffixAcrossWraps(t *testing.T) {
 	t.Parallel()
 
@@ -248,6 +311,9 @@ func TestGitExecHelperProcess(t *testing.T) {
 	switch os.Getenv("SPAS_GITEXEC_HELPER") {
 	case "":
 		return
+	case "sleep":
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
 	case "capture-overflow":
 		writeRepeated(os.Stdout, limits.MaxCapturedGitStdoutBytes+1)
 		_, _ = io.Copy(io.Discard, os.Stdin)
@@ -258,6 +324,9 @@ func TestGitExecHelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "stream-output":
 		_, _ = os.Stdout.Write(helperStreamOutput())
+		os.Exit(0)
+	case "copy-stdin":
+		_, _ = io.Copy(os.Stdout, os.Stdin)
 		os.Exit(0)
 	case "overflow-with-inherited-pipes":
 		command := exec.Command(os.Args[0], "-test.run=^TestGitExecHelperProcess$")
@@ -323,5 +392,94 @@ func TestExitCode(t *testing.T) {
 	code, ok := ExitCode(err)
 	if !ok || code == 0 {
 		t.Fatalf("ExitCode() = (%d, %v), want non-zero true", code, ok)
+	}
+}
+
+func TestRunnerTimeoutKillsSubprocess(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "sleep")
+
+	runner := Runner{
+		Path: os.Args[0],
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runner.Run(
+		ctx,
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("Run() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want errors.Is context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("Run() error string = %q, want context deadline exceeded description", err.Error())
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("Run() took %s, want timeout around 50ms", elapsed)
+	}
+}
+
+func TestRunnerStreamingTimeoutKillsSubprocess(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "sleep")
+
+	var streamed bytes.Buffer
+	runner := Runner{
+		Path:   os.Args[0],
+		Stdout: &streamed,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := runner.RunStreaming(
+		ctx,
+		t.TempDir(),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err == nil {
+		t.Fatal("RunStreaming() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunStreaming() error = %v, want errors.Is context.DeadlineExceeded", err)
+	}
+}
+
+func TestRunnerInputTimeoutKillsSubprocess(t *testing.T) {
+	t.Setenv("SPAS_GITEXEC_HELPER", "sleep")
+
+	runner := Runner{
+		Path: os.Args[0],
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := runner.RunInput(
+		ctx,
+		t.TempDir(),
+		strings.NewReader("sample"),
+		"-test.run=^TestGitExecHelperProcess$",
+	)
+	if err == nil {
+		t.Fatal("RunInput() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunInput() error = %v, want errors.Is context.DeadlineExceeded", err)
+	}
+}
+
+func TestRunnerSucceedsWithinTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runner := Runner{}
+	result, err := runner.Run(ctx, t.TempDir(), "--version")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(result.Stdout) == 0 {
+		t.Fatal("Run() returned empty stdout")
 	}
 }

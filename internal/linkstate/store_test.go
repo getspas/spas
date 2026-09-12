@@ -2,6 +2,7 @@ package linkstate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/getspas/spas/internal/githubref"
+	"github.com/getspas/spas/internal/limits"
 	"github.com/getspas/spas/internal/provider"
 )
 
@@ -81,6 +83,119 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if len(got.PendingAdds) != 2 || got.PendingAdds[0] != "a" {
 		t.Fatalf("Load().PendingAdds = %v", got.PendingAdds)
+	}
+}
+
+func TestStoreRejectsPrivatePathCountAboveLimit(t *testing.T) {
+	t.Parallel()
+
+	paths := make([]string, limits.MaxPrivateTreeEntries+1)
+	for index := range paths {
+		paths[index] = fmt.Sprintf("managed/%05d.txt", index)
+	}
+	newState := func(t *testing.T) (Store, State) {
+		t.Helper()
+		root := t.TempDir()
+		store := Store{
+			ConfigDir: filepath.Join(root, "config"),
+			DataDir:   filepath.Join(root, "data"),
+		}
+		state := New(
+			filepath.Join(root, "public"),
+			filepath.Join(root, "public", ".git"),
+			testRepositoryRef(),
+			"main",
+			store,
+		)
+		state.ManagedPaths = append([]string{}, paths...)
+		return store, state
+	}
+
+	t.Run("save", func(t *testing.T) {
+		store, state := newState(t)
+		err := store.Save(state)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprint(limits.MaxPrivateTreeEntries)) {
+			t.Fatalf("Save() error = %v, want private-tree limit %d", err, limits.MaxPrivateTreeEntries)
+		}
+	})
+
+	t.Run("load", func(t *testing.T) {
+		store, state := newState(t)
+		data, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(store.path(state.LinkID)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.path(state.LinkID), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.Load(state.Public.Root, state.Public.GitCommonDir)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprint(limits.MaxPrivateTreeEntries)) {
+			t.Fatalf("Load() error = %v, want private-tree limit %d", err, limits.MaxPrivateTreeEntries)
+		}
+	})
+
+	t.Run("active merge", func(t *testing.T) {
+		store, state := newState(t)
+		state.ManagedPaths = nil
+		active := validActiveMerge(paths, nil, nil)
+		state.Private.Initialized = true
+		state.Private.ExpectedHead = active.PreMergeHead
+		state.ActiveMerge = &active
+		err := store.Save(state)
+		if err == nil || !strings.Contains(err.Error(), "active merge state") {
+			t.Fatalf("Save() error = %v, want active-merge private-tree limit", err)
+		}
+	})
+
+	t.Run("materialization", func(t *testing.T) {
+		store, state := newState(t)
+		state.ManagedPaths = nil
+		snapshots := make([]WorkspaceSnapshot, len(paths))
+		for index, path := range paths {
+			snapshots[index] = WorkspaceSnapshot{Path: path}
+		}
+		state.Materializing = &Materialization{
+			Phase:              MaterializationPushPending,
+			ResultPrivateHead:  strings.Repeat("a", 40),
+			FinalPaths:         append([]string{}, paths...),
+			WorkspaceSnapshots: snapshots,
+		}
+		err := store.Save(state)
+		if err == nil || !strings.Contains(err.Error(), "materialization state") {
+			t.Fatalf("Save() error = %v, want materialization private-tree limit", err)
+		}
+	})
+}
+
+func TestSaveLoadPublicApproved(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := Store{
+		ConfigDir: filepath.Join(root, "config"),
+		DataDir:   filepath.Join(root, "data"),
+	}
+	state := New(
+		filepath.Join(root, "public"),
+		filepath.Join(root, "public", ".git"),
+		testRepositoryRef(),
+		"main",
+		store,
+	)
+	state.Private.PublicApproved = true
+
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := store.Load(state.Public.Root, state.Public.GitCommonDir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !got.Private.PublicApproved {
+		t.Fatalf("Load().Private.PublicApproved = false, want true")
 	}
 }
 

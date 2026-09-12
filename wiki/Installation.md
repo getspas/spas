@@ -32,7 +32,24 @@ git --version
 
 ---
 
-## 2. Verify Download Integrity
+## 2. Verify Release Authenticity and Integrity
+
+SPAS releases provide both GitHub build provenance attestations and a
+`checksums.txt` SHA-256 manifest. Use both checks: the attestation verifies
+that the archive was produced by this repository's release workflow, while
+the checksum detects corruption and provides a portable digest for other
+tooling.
+
+First, install the [GitHub CLI](https://cli.github.com/) and verify the
+downloaded archive's provenance:
+
+```bash
+gh attestation verify spas_<VERSION>_<OS>_<ARCH>.<EXT> --repo getspas/spas
+```
+
+Replace the placeholder with the archive you downloaded, for example
+`spas_1.0.0_linux_amd64.tar.gz`. Verification must succeed before you extract
+or run the binary.
 
 Every release includes an official `checksums.txt` file containing SHA-256 digests. Download `checksums.txt` into the same folder as the release archive and verify the integrity:
 
@@ -57,13 +74,15 @@ Get-FileHash .\spas_*_windows_amd64.zip -Algorithm SHA256
 Select-String -Path .\checksums.txt -Pattern "windows_amd64"
 ```
 
-The output hash must match the value listed in `checksums.txt`.
+The output hash must match the value listed in `checksums.txt`. A checksum
+match is not a substitute for the provenance check above because the archive
+and checksum file are distributed through the same release channel.
 
 ---
 
 ## 3. Build from Source
 
-If you prefer building from source, ensure you have **Go 1.26.5 or newer** installed:
+If you prefer building from source, ensure you have **Go 1.26.8 or newer** installed:
 
 ```bash
 go install -trimpath github.com/getspas/spas@latest

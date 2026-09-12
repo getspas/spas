@@ -3,18 +3,22 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/app"
 	"github.com/getspas/spas/internal/interaction"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/spaserr"
+	"github.com/getspas/spas/internal/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -28,7 +32,7 @@ func TestRootHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, expected := range []string{"link", "add", "sync", "doctor", "--non-interactive", "--json"} {
+	for _, expected := range []string{"link", "add", "sync", "doctor", "--non-interactive", "--json", "--timeout"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q", expected)
 		}
@@ -127,7 +131,7 @@ func TestMutatingCommandHelpExplainsBehaviorAndOneLineUse(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string][]string{
-		"link":   {"no network request", "One line", "--non-interactive"},
+		"link":   {"visibility probe", "--allow-public", "--dry-run", "One line", "--non-interactive"},
 		"add":    {"local exclude file", "One line", "--non-interactive"},
 		"remove": {"does not", "--non-interactive"},
 		"sync":   {"never creates a commit in the project repository", "One line", "--non-interactive"},
@@ -226,6 +230,89 @@ func TestVersionCommands(t *testing.T) {
 			t.Fatalf("Execute(%v) output = %q", args, output.String())
 		}
 	}
+
+	for _, args := range [][]string{{"version", "--json"}, {"--json", "version"}} {
+		var output bytes.Buffer
+		root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error = %v", output.String(), err)
+		}
+		wantKeys := []string{"schemaVersion", "version", "commit", "date"}
+		if len(payload) != len(wantKeys) {
+			t.Fatalf("payload keys = %v, want exactly %v", payload, wantKeys)
+		}
+		for _, key := range wantKeys {
+			if _, ok := payload[key]; !ok {
+				t.Fatalf("payload keys = %v, missing %q", payload, key)
+			}
+		}
+		if payload["schemaVersion"] != float64(app.JSONSchemaVersion) {
+			t.Fatalf("schemaVersion = %v, want %d", payload["schemaVersion"], app.JSONSchemaVersion)
+		}
+		if payload["version"] != version.Version || payload["commit"] != version.Commit || payload["date"] != version.Date {
+			t.Fatalf("payload = %+v, want version=%q commit=%q date=%q", payload, version.Version, version.Commit, version.Date)
+		}
+	}
+}
+
+func TestExecuteJSONErrorEnvelopeHasExactKeys(t *testing.T) {
+	originalArgs := os.Args
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = originalArgs
+		os.Stderr = originalStderr
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	os.Args = []string{"spas", "--json", "--timeout", "-1s", "version"}
+	os.Stderr = writer
+	if exit := Execute(); exit != 2 {
+		t.Fatalf("Execute() exit = %d, want 2", exit)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = originalStderr
+	payloadBytes, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", string(payloadBytes), err)
+	}
+	if len(payload) != 3 {
+		t.Fatalf("error envelope = %#v, want exactly schemaVersion, ok, and error", payload)
+	}
+	for _, key := range []string{"schemaVersion", "ok", "error"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("error envelope = %#v, missing %q", payload, key)
+		}
+	}
+	if payload["schemaVersion"] != float64(app.JSONSchemaVersion) || payload["ok"] != false {
+		t.Fatalf("error envelope = %#v", payload)
+	}
+	errorObject, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", payload["error"])
+	}
+	if len(errorObject) != 2 || errorObject["code"] != "invalid_usage" {
+		t.Fatalf("error = %#v, want exactly code and message", errorObject)
+	}
+	if _, ok := errorObject["message"].(string); !ok {
+		t.Fatalf("error.message = %#v, want string", errorObject["message"])
+	}
 }
 
 func TestVerboseEmitsSafeDiagnosticsAndJSONSuppressesThem(t *testing.T) {
@@ -294,10 +381,23 @@ func TestUnknownCommandClassifiesAsInvalidUsage(t *testing.T) {
 func TestJSONModeIsRecognizedBeforeCommandResolution(t *testing.T) {
 	t.Parallel()
 
-	if !jsonRequested([]string{"--json", "unknown"}) ||
-		!jsonRequested([]string{"unknown", "--json=true"}) ||
-		jsonRequested([]string{"--", "--json"}) {
-		t.Fatal("jsonRequested() did not preserve root JSON framing for pre-execution errors")
+	for _, test := range []struct {
+		args []string
+		want bool
+	}{
+		{args: []string{"--json", "unknown"}, want: true},
+		{args: []string{"unknown", "--json=true"}, want: true},
+		{args: []string{"unknown", "--json=1"}, want: true},
+		{args: []string{"--", "--json"}, want: false},
+		{args: []string{"--json=false", "unknown"}, want: false},
+		{args: []string{"--json=0", "unknown"}, want: false},
+		{args: []string{"--json", "--json=false"}, want: false},
+		{args: []string{"--json=false", "--json"}, want: true},
+		{args: []string{"--json", "--", "--json=false"}, want: true},
+	} {
+		if got := jsonRequested(test.args); got != test.want {
+			t.Errorf("jsonRequested(%v) = %t, want %t", test.args, got, test.want)
+		}
 	}
 }
 
@@ -325,12 +425,14 @@ func TestExitAndErrorCodes(t *testing.T) {
 		errorKey string
 	}{
 		{err: errors.New("operation"), exit: 1, errorKey: "operation_failed"},
+		{err: context.DeadlineExceeded, exit: 1, errorKey: "operation_failed"},
+		{err: context.Canceled, exit: 1, errorKey: "operation_failed"},
 		{err: spaserr.Wrap(spaserr.KindInvalidUsage, errors.New("usage")), exit: 2, errorKey: "invalid_usage"},
 		{err: linkstate.ErrNotLinked, exit: 3, errorKey: "not_linked"},
 		{err: interaction.ErrDecisionRequired, exit: 4, errorKey: "decision_required"},
 		{err: spaserr.Wrap(spaserr.KindPathConflict, errors.New("conflict")), exit: 5, errorKey: "path_conflict"},
 		{err: app.ErrPrivateMergeConflict, exit: 6, errorKey: "private_merge_conflict"},
-		{err: spaserr.Wrap(spaserr.KindAuthNetwork, errors.New("auth")), exit: 7, errorKey: "github_auth_or_network"},
+		{err: spaserr.Wrap(spaserr.KindAuthNetwork, errors.New("auth")), exit: 7, errorKey: "auth_or_network"},
 		{err: spaserr.Wrap(spaserr.KindUnsafeGitState, errors.New("unsafe")), exit: 8, errorKey: "unsafe_git_state"},
 		{err: spaserr.Wrap(spaserr.KindExclusionValidation, errors.New("exclusion")), exit: 9, errorKey: "exclusion_validation_failed"},
 		{err: spaserr.Wrap(spaserr.KindLockHeld, errors.New("lock")), exit: 10, errorKey: "lock_held"},
@@ -402,11 +504,128 @@ func TestResolveCommitMessage(t *testing.T) {
 	}
 }
 
+func TestTimeoutFlagRejectsNegativeDuration(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"--timeout", "-5s", "version"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() with negative timeout error = nil, want error")
+	}
+	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindInvalidUsage {
+		t.Fatalf("Execute() with negative timeout error kind = %v, want KindInvalidUsage", kind)
+	}
+	if !strings.Contains(err.Error(), "--timeout cannot be negative") {
+		t.Fatalf("Execute() error = %v, want negative timeout message", err)
+	}
+}
+
+func TestTimeoutFlagSetsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	var observedDeadline time.Time
+	var deadlineSet bool
+	testCmd := &cobra.Command{
+		Use: "test-timeout",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			observedDeadline, deadlineSet = cmd.Context().Deadline()
+			return nil
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"--timeout", "5s", "test-timeout"})
+	before := time.Now()
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !deadlineSet {
+		t.Fatal("command context has no deadline set")
+	}
+	if observedDeadline.Before(before) || observedDeadline.After(before.Add(6*time.Second)) {
+		t.Fatalf("observed deadline = %v, want within [now, now+5s]", observedDeadline)
+	}
+}
+
+func TestTimeoutFlagExpiredDeadlineSurfacesOperationFailed(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	testCmd := &cobra.Command{
+		Use: "test-timeout-expire",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			<-cmd.Context().Done()
+			return cmd.Context().Err()
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"--timeout", "10ms", "test-timeout-expire"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want context deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Execute() error = %v, want context.DeadlineExceeded", err)
+	}
+	if got := exitCode(err); got != 1 {
+		t.Fatalf("exitCode(err) = %d, want 1", got)
+	}
+	if got := errorCode(err); got != "operation_failed" {
+		t.Fatalf("errorCode(err) = %q, want operation_failed", got)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = dir
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func TestDoctorCommandUnlinked(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	var output bytes.Buffer
+	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"doctor", "--repo", dir})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute(doctor) error = %v\n%s", err, output.String())
+	}
+	text := output.String()
+	for _, expected := range []string{"git", "data-dirs", "lock", "ok", "workspace", "warning", "not a Git repository — link checks skipped:"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("output missing %q: %s", expected, text)
+		}
+	}
+
+	output.Reset()
+	root = NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
+	root.SetArgs([]string{"doctor", "--repo", dir, "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute(doctor --json) error = %v\n%s", err, output.String())
+	}
+	var result app.DoctorResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode doctor json: %v\n%s", err, output.String())
+	}
+	if result.SchemaVersion != app.JSONSchemaVersion || !result.Healthy || result.Errors != 0 || result.Warnings != 1 {
+		t.Fatalf("doctor result = %#v, want healthy with 1 warning and schemaVersion %d", result, app.JSONSchemaVersion)
+	}
+	foundWorkspaceWarning := false
+	for _, check := range result.Checks {
+		if check.Name == "workspace" && check.Status == "warning" && strings.Contains(check.Message, "not a Git repository — link checks skipped:") {
+			foundWorkspaceWarning = true
+			break
+		}
+	}
+	if !foundWorkspaceWarning {
+		t.Fatalf("doctor result checks = %#v, want workspace warning", result.Checks)
 	}
 }

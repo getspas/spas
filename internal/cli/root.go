@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/getspas/spas/internal/app"
 	"github.com/getspas/spas/internal/appdirs"
@@ -31,18 +33,24 @@ type rootOptions struct {
 	json           bool
 	gitPath        string
 	verbose        bool
+	timeout        time.Duration
+	cancel         context.CancelFunc
 }
 
 func Execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	root := NewRootContext(ctx, os.Stdin, os.Stdout, os.Stderr)
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
+	if options != nil && options.cancel != nil {
+		options.cancel()
+	}
+	if err != nil {
 		if ctx.Err() != nil {
 			err = spaserr.Wrap(spaserr.KindInterrupted, fmt.Errorf("interrupted: %w", err))
 		}
 		err = classifyExecutionError(err)
-		options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
 		jsonMode := options != nil && options.json
 		if !jsonMode {
 			jsonMode = jsonRequested(os.Args[1:])
@@ -59,8 +67,9 @@ func Execute() int {
 					"message": err.Error(),
 				}
 				_ = json.NewEncoder(root.ErrOrStderr()).Encode(map[string]any{
-					"ok":    false,
-					"error": payload,
+					"schemaVersion": app.JSONSchemaVersion,
+					"ok":            false,
+					"error":         payload,
 				})
 			}
 		} else {
@@ -72,15 +81,20 @@ func Execute() int {
 }
 
 func jsonRequested(arguments []string) bool {
+	requested := false
 	for _, argument := range arguments {
 		if argument == "--" {
-			return false
+			break
 		}
-		if argument == "--json" || argument == "--json=true" {
-			return true
+		if argument == "--json" {
+			requested = true
+		} else if strings.HasPrefix(argument, "--json=") {
+			if val, err := strconv.ParseBool(strings.TrimPrefix(argument, "--json=")); err == nil {
+				requested = val
+			}
 		}
 	}
-	return false
+	return requested
 }
 
 func NewRootContext(parent context.Context, in io.Reader, out, errOut io.Writer) *cobra.Command {
@@ -99,6 +113,20 @@ commit in the project repository.`,
 		SilenceUsage:  true,
 		Version:       version.Version,
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			if err := command.ValidateFlagGroups(); err != nil {
+				return spaserr.Wrap(spaserr.KindInvalidUsage, err)
+			}
+			if options.timeout < 0 {
+				return spaserr.Wrap(
+					spaserr.KindInvalidUsage,
+					fmt.Errorf("--timeout cannot be negative: %v", options.timeout),
+				)
+			}
+			if options.timeout > 0 {
+				var timeoutCtx context.Context
+				timeoutCtx, options.cancel = context.WithTimeout(command.Context(), options.timeout)
+				command.SetContext(timeoutCtx)
+			}
 			if !options.verbose || options.json {
 				return nil
 			}
@@ -134,7 +162,7 @@ commit in the project repository.`,
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
 	root.PersistentFlags().BoolVarP(&options.verbose, "verbose", "v", false, "show additional diagnostics without file contents")
-
+	root.PersistentFlags().DurationVar(&options.timeout, "timeout", 0, "maximum duration for command execution (default: no timeout)")
 	root.AddCommand(
 		newLinkCommand(options),
 		newAddCommand(options),
@@ -145,7 +173,7 @@ commit in the project repository.`,
 		newDoctorCommand(options),
 		newUnlinkCommand(options),
 		newCompletionCommand(),
-		newVersionCommand(),
+		newVersionCommand(options),
 	)
 	for _, command := range root.Commands() {
 		if command.Args == nil {
@@ -172,8 +200,10 @@ func newLinkCommand(root *rootOptions) *cobra.Command {
 		Use:   "link [OWNER/REPOSITORY | GITHUB-URL]",
 		Short: "Link this project workspace to a GitHub repository",
 		Long: `Create a local association between this project workspace and a linked GitHub
-repository. link performs no network request, clone, fetch, file copy,
-local-exclude update, or Git configuration change.`,
+repository without cloning, fetching, copying files, updating local excludes,
+or changing Git configuration. Unless --allow-public or --dry-run is used,
+link runs a GitHub visibility probe with credential helpers and prompts disabled
+and asks before accepting a publicly readable repository.`,
 		Example: `  # Interactive
   spas link
 
@@ -228,8 +258,8 @@ local-exclude update, or Git configuration change.`,
 	command.Flags().StringVar(&transport, "transport", "", "Git transport for OWNER/REPOSITORY: https or ssh")
 	command.Flags().StringVar(&branch, "branch", "", "branch in the linked repository; otherwise discover it during first sync")
 	command.Flags().BoolVar(&replace, "replace", false, "replace an existing local link without deleting its managed checkout")
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving it")
-	command.Flags().BoolVar(&allowPublic, "allow-public", false, "allow linking a publicly readable repository")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving or network access")
+	command.Flags().BoolVar(&allowPublic, "allow-public", false, "accept public-repository risk and skip the visibility probe")
 	return command
 }
 
@@ -605,12 +635,22 @@ func newCompletionCommand() *cobra.Command {
 	return command
 }
 
-func newVersionCommand() *cobra.Command {
+func newVersionCommand(root *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show version and build information",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
+			if root.json {
+				encoder := json.NewEncoder(command.OutOrStdout())
+				encoder.SetEscapeHTML(false)
+				return encoder.Encode(map[string]any{
+					"schemaVersion": app.JSONSchemaVersion,
+					"version":       version.Version,
+					"commit":        version.Commit,
+					"date":          version.Date,
+				})
+			}
 			_, err := fmt.Fprintf(command.OutOrStdout(), "spas %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
 			return err
 		},
@@ -639,8 +679,15 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	nonInteractive := options.nonInteractive || options.json
 	prompt := interaction.Detect(command.InOrStdin(), command.ErrOrStderr(), nonInteractive)
 	prompt.AssumeYes = options.yes
+	gitPath := options.gitPath
+	if strings.ContainsRune(gitPath, '/') || strings.ContainsRune(gitPath, filepath.Separator) || filepath.VolumeName(gitPath) != "" {
+		gitPath, err = filepath.Abs(gitPath)
+		if err != nil {
+			return app.App{}, fmt.Errorf("resolve Git executable: %w", err)
+		}
+	}
 	git := gitexec.Runner{
-		Path: options.gitPath,
+		Path: gitPath,
 		// Git terminal prompts are disabled whenever SPAS itself cannot
 		// prompt, including non-TTY runs, so authentication fails
 		// deterministically instead of hanging while the link lock is held.

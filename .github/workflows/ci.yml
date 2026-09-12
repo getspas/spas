@@ -4,9 +4,8 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -115,7 +114,38 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
       - name: Test
-        run: go test -timeout 30m ./...
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $logs = Join-Path $env:RUNNER_TEMP 'spas-native-tests'
+          New-Item -ItemType Directory -Path $logs -Force | Out-Null
+          $timing = [ordered]@{
+            commit = $env:GITHUB_SHA
+            startUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            endUtc = $null
+            exitCode = $null
+          }
+          $timing | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $logs 'command.json')
+          $testExit = 1
+          try {
+            go test -count=1 -json -timeout 30m ./... 2> (Join-Path $logs 'stderr.log') |
+              Tee-Object -FilePath (Join-Path $logs 'tests.jsonl')
+            $testExit = $LASTEXITCODE
+          }
+          finally {
+            $timing.endUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            $timing.exitCode = $testExit
+            $timing | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $logs 'command.json')
+          }
+          exit $testExit
+      - name: Upload native test timing
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-test-timing-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/spas-native-tests/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Vet
         run: go vet ./...
 

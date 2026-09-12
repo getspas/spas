@@ -9,8 +9,9 @@ Welcome to the official SPAS documentation. SPAS keeps private and environment-s
 1. **[Installation](Installation)** — Download prebuilt binaries, verify checksums, or compile from source.
 2. **[Quick Start Guide](Quick-start)** — Connect your workspace, select private files, and run your first synchronization in minutes.
 3. **[Command Reference](Command-reference)** — Complete syntax, flags, automation recipes, and exit code reference for all CLI commands.
-4. **[Troubleshooting Guide](Troubleshooting)** — Diagnose errors with `spas doctor`, resolve merge conflicts, and sanitize debug logs.
-5. **[Safety & Limitations](Safety-and-limitations)** — Review security models, worktree constraints, and supported file types.
+4. **[JSON Output Schema](JSON-output-schema)** — Structured payload contracts and schema versioning for CI/CD automation.
+5. **[Troubleshooting Guide](Troubleshooting)** — Diagnose errors with `spas doctor`, resolve merge conflicts, and sanitize debug logs.
+6. **[Safety & Limitations](Safety-and-limitations)** — Review security models, worktree constraints, and supported file types.
 
 ---
 
@@ -21,6 +22,7 @@ Welcome to the official SPAS documentation. SPAS keeps private and environment-s
 | **[Installation](Installation)** | Installation instructions for Linux, macOS, and Windows with SHA-256 verification and shell completion setup. |
 | **[Quick Start](Quick-start)** | Step-by-step walkthrough linking a workspace, managing assets, and syncing across developer machines. |
 | **[Command Reference](Command-reference)** | Detailed documentation of all commands (`link`, `add`, `remove`, `sync`, `status`, `diff`, `doctor`, `unlink`). |
+| **[JSON Output Schema](JSON-output-schema)** | Machine-readable JSON output schemas, error envelopes, and automation payloads. |
 | **[Troubleshooting](Troubleshooting)** | Practical solutions for common errors, conflict resolution procedures, and recovery flows. |
 | **[Safety & Limitations](Safety-and-limitations)** | Security boundaries, filesystem concurrency models, supported file modes, and resource limits. |
 

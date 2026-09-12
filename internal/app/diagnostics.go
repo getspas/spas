@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -12,9 +15,12 @@ import (
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/publicgit"
+	"github.com/getspas/spas/internal/spaserr"
 )
 
 type DiffOptions struct {
@@ -36,27 +42,16 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 		return a.diffStaged(ctx, repository, state, options)
 	}
 	managed := append(append([]string{}, state.ManagedPaths...), state.PendingAdds...)
+	managedSet := stringSet(state.ManagedPaths)
+	pendingAdds := stringSet(state.PendingAdds)
 	pendingRemovals := stringSet(state.PendingRemovalPaths())
-	if len(options.Paths) > 0 {
-		filter := make(map[string]struct{})
-		for _, value := range options.Paths {
-			path, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
-			if err != nil {
-				return err
-			}
-			filter[path.String()] = struct{}{}
-		}
-		var selected []string
-		for _, value := range managed {
-			if _, found := filter[value]; found {
-				selected = append(selected, value)
-			}
-		}
-		managed = selected
+	managed, err = a.selectDiffPaths(ctx, repository, managed, options.Paths)
+	if err != nil {
+		return err
 	}
 	sort.Strings(managed)
 
-	var changed []string
+	changed := []string{}
 	privateRoot := state.Private.LocalRepositoryPath
 	for _, value := range managed {
 		path, err := pathmodel.Parse(value)
@@ -70,18 +65,8 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 			if options.NameOnly || a.JSON {
 				continue
 			}
-			args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
-			if options.Stat {
-				args = append(args, "--stat")
-			}
-			args = append(args, "--", privateFile, os.DevNull)
-			diffGit := a.Git
-			diffGit.Stdout = a.Out
-			_, diffErr := diffGit.RunStreaming(ctx, repository.Root, args...)
-			if diffErr != nil {
-				if code, ok := gitexec.ExitCode(diffErr); !ok || code != 1 {
-					return diffErr
-				}
+			if err := a.diffFiles(ctx, repository.Root, privateFile, os.DevNull, options.Stat); err != nil {
+				return err
 			}
 			continue
 		}
@@ -96,9 +81,14 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 			continue
 		}
 		equal, err := filesync.Equal(publicFile, privateFile)
-		if os.IsNotExist(err) {
-			equal = false
-			err = nil
+		var pathErr *os.PathError
+		if errors.Is(err, os.ErrNotExist) && errors.As(err, &pathErr) && pathErr.Path == privateFile {
+			_, adding := pendingAdds[value]
+			_, alreadyManaged := managedSet[value]
+			if adding && !alreadyManaged {
+				privateFile = os.DevNull
+				err = nil
+			}
 		}
 		if err != nil {
 			return err
@@ -110,18 +100,8 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 		if options.NameOnly || a.JSON {
 			continue
 		}
-		args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
-		if options.Stat {
-			args = append(args, "--stat")
-		}
-		args = append(args, "--", privateFile, publicFile)
-		diffGit := a.Git
-		diffGit.Stdout = a.Out
-		_, diffErr := diffGit.RunStreaming(ctx, repository.Root, args...)
-		if diffErr != nil {
-			if code, ok := gitexec.ExitCode(diffErr); !ok || code != 1 {
-				return diffErr
-			}
+		if err := a.diffFiles(ctx, repository.Root, privateFile, publicFile, options.Stat); err != nil {
+			return err
 		}
 	}
 	if a.JSON {
@@ -137,35 +117,51 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 	return nil
 }
 
+func (a App) diffFiles(ctx context.Context, root, oldFile, newFile string, stat bool) error {
+	args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
+	if stat {
+		args = append(args, "--stat")
+	}
+	args = append(args, "--", oldFile, newFile)
+	diffGit := a.Git
+	output := bufio.NewWriter(a.Out)
+	diffGit.Stdout = output
+	var diagnostics *bufio.Writer
+	if diffGit.Stderr != nil {
+		diagnostics = bufio.NewWriter(diffGit.Stderr)
+		diffGit.Stderr = diagnostics
+	}
+	result, err := diffGit.RunStreaming(ctx, root, args...)
+	// Buffered writers retain delivery errors even when os/exec returns the
+	// process exit status in preference to an output-copy error.
+	writeErr := output.Flush()
+	if diagnostics != nil {
+		writeErr = errors.Join(writeErr, diagnostics.Flush())
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	// Git also returns 1 when it cannot access an operand before producing a
+	// diff. A completed single-file patch or stat comparison emits output.
+	if code, ok := gitexec.ExitCode(err); ok && code == 1 && len(result.Stdout) > 0 {
+		return nil
+	}
+	return err
+}
+
 func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, state linkstate.State, options DiffOptions) error {
 	if !state.Private.Initialized {
 		return fmt.Errorf("private repository is not initialized; nothing is staged")
 	}
 	private := a.privateRepository(state)
-	var filters []pathmodel.Path
-	for _, value := range options.Paths {
-		path, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
-		if err != nil {
-			return err
-		}
-		filters = append(filters, path)
-	}
-	changes, err := private.ChangedPaths(ctx)
+	paths, err := private.StagedPaths(ctx)
 	if err != nil {
 		return err
 	}
-	filterSet := make(map[string]struct{}, len(filters))
-	for _, path := range filters {
-		filterSet[path.String()] = struct{}{}
-	}
-	var changed []string
-	for _, change := range changes {
-		if len(filterSet) > 0 {
-			if _, found := filterSet[change.Path.String()]; !found {
-				continue
-			}
-		}
-		changed = append(changed, change.Path.String())
+	changed := pathsToStrings(paths)
+	changed, err = a.selectDiffPaths(ctx, repository, changed, options.Paths)
+	if err != nil {
+		return err
 	}
 	sort.Strings(changed)
 	if a.JSON {
@@ -179,14 +175,99 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 		}
 		return nil
 	}
-	return private.StreamStagedDiff(ctx, options.Stat, filters, a.Out)
+	if len(options.Paths) > 0 {
+		if len(changed) == 0 {
+			return nil
+		}
+		return private.StreamStagedDiff(ctx, options.Stat, stringsToPaths(changed), a.Out)
+	}
+	return private.StreamStagedDiff(ctx, options.Stat, nil, a.Out)
+}
+
+func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repository, known, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return known, nil
+	}
+	// Git's configured policy (default false) is readable without the workspace
+	// write probe used by mutation collision checks. Existing aliases can also
+	// establish their identity directly when that policy is case-sensitive.
+	ignoreCase, _, err := repository.EffectiveIgnoreCase(ctx)
+	if err != nil {
+		return nil, err
+	}
+	exact := stringSet(known)
+	folded := make(map[string][]pathmodel.Path, len(exact))
+	for value := range exact {
+		path := pathmodel.Path(value)
+		key := pathmodel.Canonical(path, true)
+		folded[key] = append(folded[key], path)
+	}
+	selected := []string{}
+	seen := make(map[pathmodel.Path]bool)
+	for _, value := range values {
+		requested, observed, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
+		if err != nil {
+			return nil, err
+		}
+		stored := requested
+		if _, matches := exact[requested.String()]; !matches {
+			candidates := folded[pathmodel.Canonical(requested, true)]
+			if !ignoreCase && len(candidates) > 0 {
+				candidates, err = existingDiffAliases(repository.Root, observed, candidates)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(candidates) == 0 {
+				continue
+			}
+			if len(candidates) > 1 {
+				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("%q matches multiple changed paths; select an exact stored spelling", requested))
+			}
+			stored = candidates[0]
+		}
+		path, err := authoritativeManagedPath(repository.Root, observed, stored)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[path] {
+			selected = append(selected, path.String())
+			seen[path] = true
+		}
+	}
+	return selected, nil
+}
+
+func existingDiffAliases(root, observed string, candidates []pathmodel.Path) ([]pathmodel.Path, error) {
+	selected, err := os.Lstat(observed)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var matches []pathmodel.Path
+	for _, candidate := range candidates {
+		info, err := os.Lstat(candidate.OSPath(root))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if os.SameFile(selected, info) {
+			matches = append(matches, candidate)
+		}
+	}
+	return matches, nil
 }
 
 type DoctorResult struct {
-	Healthy  bool          `json:"healthy"`
-	Checks   []DoctorCheck `json:"checks"`
-	Warnings int           `json:"warnings"`
-	Errors   int           `json:"errors"`
+	SchemaVersion int           `json:"schemaVersion"`
+	Healthy       bool          `json:"healthy"`
+	Checks        []DoctorCheck `json:"checks"`
+	Warnings      int           `json:"warnings"`
+	Errors        int           `json:"errors"`
 }
 
 type DoctorCheck struct {
@@ -196,11 +277,7 @@ type DoctorCheck struct {
 }
 
 func (a App) Doctor(ctx context.Context) error {
-	repository, state, err := a.linked(ctx)
-	if err != nil {
-		return err
-	}
-	result := DoctorResult{Healthy: true}
+	result := DoctorResult{SchemaVersion: JSONSchemaVersion, Healthy: true}
 	add := func(name, status, message string) {
 		result.Checks = append(result.Checks, DoctorCheck{Name: name, Status: status, Message: message})
 		switch status {
@@ -211,17 +288,41 @@ func (a App) Doctor(ctx context.Context) error {
 			result.Healthy = false
 		}
 	}
-	if state.Materializing != nil {
-		add("pending-recovery", "error", "a previous sync has a private result waiting to be pushed or materialized; run spas sync")
-	} else {
-		add("pending-recovery", "ok", "no interrupted push or materialization")
-	}
 
-	version, err := a.Git.Run(ctx, repository.Root, "--version")
+	gitVersion, err := publicgit.RequireSupportedGit(ctx, a.Git)
 	if err != nil {
 		add("git", "error", err.Error())
 	} else {
-		add("git", "ok", strings.TrimSpace(string(version.Stdout)))
+		add("git", "ok", gitVersion)
+	}
+
+	configErr := checkDirectoryWritable(a.Store.ConfigDir)
+	dataErr := checkDirectoryWritable(a.Store.DataDir)
+	if configErr != nil && dataErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("config dir %q: %v; data dir %q: %v", a.Store.ConfigDir, configErr, a.Store.DataDir, dataErr))
+	} else if configErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("config dir %q: %v", a.Store.ConfigDir, configErr))
+	} else if dataErr != nil {
+		add("data-dirs", "error", fmt.Sprintf("data dir %q: %v", a.Store.DataDir, dataErr))
+	} else {
+		add("data-dirs", "ok", "config and data directories are writable")
+	}
+
+	lockDir := filepath.Join(a.Store.DataDir, "locks")
+	if lockErr := checkLockAcquirable(lockDir); lockErr != nil {
+		add("lock", "error", fmt.Sprintf("advisory lock check failed: %v", lockErr))
+	} else {
+		add("lock", "ok", "advisory file locking is functional")
+	}
+
+	repository, repoErr := a.publicRepository(ctx)
+	if repoErr != nil {
+		if errors.Is(repoErr, publicgit.ErrNotRepository) {
+			add("workspace", "warning", fmt.Sprintf("not a Git repository — link checks skipped: %v", repoErr))
+		} else {
+			add("workspace", "error", fmt.Sprintf("repository inspection failed: %v", repoErr))
+		}
+		return a.renderDoctorResult(result)
 	}
 
 	worktrees, err := repository.WorktreeCount(ctx)
@@ -231,6 +332,28 @@ func (a App) Doctor(ctx context.Context) error {
 		add("worktrees", "error", "multiple public worktrees share the repository-local exclude file; mutating commands are disabled in the current implementation")
 	} else {
 		add("worktrees", "ok", "single public worktree")
+	}
+
+	state, err := a.loadState(repository.Root, repository.CommonDir)
+	if err != nil {
+		if errors.Is(err, linkstate.ErrNotLinked) {
+			add("link-state", "warning", "workspace is not linked; run spas link — link checks skipped")
+			return a.renderDoctorResult(result)
+		}
+		add("link-state", "error", fmt.Sprintf("invalid link state: %v", err))
+		return a.renderDoctorResult(result)
+	}
+
+	if state.Private.Branch != "" {
+		if branchErr := privategit.ValidateBranchName(ctx, a.Git, repository.Root, state.Private.Branch); branchErr != nil {
+			add("link-state", "error", fmt.Sprintf("link state contains invalid private branch %q: %v", state.Private.Branch, branchErr))
+		}
+	}
+
+	if state.Materializing != nil {
+		add("pending-recovery", "error", "a previous sync has a private result waiting to be pushed or materialized; run spas sync")
+	} else {
+		add("pending-recovery", "ok", "no interrupted push or materialization")
 	}
 
 	configCase, present, err := repository.EffectiveIgnoreCase(ctx)
@@ -398,6 +521,10 @@ func (a App) Doctor(ctx context.Context) error {
 		add("exclude-block-integrity", "ok", "the SPAS local-exclude block matches the managed file set")
 	}
 
+	return a.renderDoctorResult(result)
+}
+
+func (a App) renderDoctorResult(result DoctorResult) error {
 	if a.JSON {
 		if err := a.write(result); err != nil {
 			return err
@@ -416,6 +543,34 @@ func (a App) Doctor(ctx context.Context) error {
 		return fmt.Errorf("doctor found %d error(s)", result.Errors)
 	}
 	return nil
+}
+
+func checkDirectoryWritable(dir string) error {
+	if dir == "" {
+		return errors.New("directory path is empty")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tempFile, err := os.CreateTemp(dir, ".doctor-probe-*")
+	if err != nil {
+		return err
+	}
+	tempName := tempFile.Name()
+	_ = tempFile.Close()
+	_ = os.Remove(tempName)
+	return nil
+}
+
+func checkLockAcquirable(lockDir string) error {
+	name := fmt.Sprintf(".doctor-probe-%d", os.Getpid())
+	testLock, err := lock.Acquire(lockDir, name)
+	if err != nil {
+		return err
+	}
+	releaseErr := testLock.Release()
+	_ = os.Remove(filepath.Join(lockDir, name+".lock"))
+	return releaseErr
 }
 
 func (a App) originConfigShape(ctx context.Context, privatePath string) (string, bool, error) {

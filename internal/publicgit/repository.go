@@ -20,8 +20,10 @@ type Repository struct {
 	Git       gitexec.Runner
 }
 
+var ErrNotRepository = errors.New("not a Git repository")
+
 func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository, error) {
-	if err := RequireSupportedGit(ctx, git); err != nil {
+	if _, err := RequireSupportedGit(ctx, git); err != nil {
 		return Repository{}, err
 	}
 	if hint == "" {
@@ -34,9 +36,19 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 
 	rootResult, err := git.Run(ctx, absoluteHint, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Repository{}, fmt.Errorf("%s is not inside a Git working tree: %w", absoluteHint, err)
+		if repositoryAbsentDiagnostic(rootResult, err) {
+			if markerErr := confirmNoGitMetadata(absoluteHint); markerErr != nil {
+				return Repository{}, fmt.Errorf("inspect public workspace %q: %w", absoluteHint, errors.Join(err, markerErr))
+			}
+			return Repository{}, fmt.Errorf("%w at %q: %w", ErrNotRepository, absoluteHint, err)
+		}
+		return Repository{}, fmt.Errorf("inspect public workspace %q: %w", absoluteHint, err)
 	}
-	root, err := filepath.Abs(strings.TrimSpace(string(rootResult.Stdout)))
+	rootPath, err := gitexec.ParsePathOutput(rootResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public workspace root: %w", err)
+	}
+	root, err := filepath.Abs(rootPath)
 	if err != nil {
 		return Repository{}, fmt.Errorf("resolve public workspace root: %w", err)
 	}
@@ -45,7 +57,10 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	if err != nil {
 		return Repository{}, fmt.Errorf("locate public Git metadata: %w", err)
 	}
-	common := strings.TrimSpace(string(commonResult.Stdout))
+	common, err := gitexec.ParsePathOutput(commonResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public Git metadata path: %w", err)
+	}
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(root, common)
 	}
@@ -58,7 +73,11 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	if err != nil {
 		return Repository{}, fmt.Errorf("locate public worktree Git directory: %w", err)
 	}
-	gitDir, err := filepath.Abs(strings.TrimSpace(string(gitDirResult.Stdout)))
+	gitDirPath, err := gitexec.ParsePathOutput(gitDirResult.Stdout)
+	if err != nil {
+		return Repository{}, fmt.Errorf("parse public worktree Git directory: %w", err)
+	}
+	gitDir, err := filepath.Abs(gitDirPath)
 	if err != nil {
 		return Repository{}, fmt.Errorf("resolve public worktree Git directory: %w", err)
 	}
@@ -66,12 +85,50 @@ func Discover(ctx context.Context, git gitexec.Runner, hint string) (Repository,
 	return Repository{Root: root, GitDir: gitDir, CommonDir: common, Git: git}, nil
 }
 
-func RequireSupportedGit(ctx context.Context, git gitexec.Runner) error {
+func repositoryAbsentDiagnostic(result gitexec.Result, err error) bool {
+	exitErr, ok := errors.AsType[*gitexec.ExitError](err)
+	if !ok || exitErr.ExitCode != 128 || len(result.Stdout) != 0 {
+		return false
+	}
+	// Runner fixes LC_ALL=C. Match Git's parent-search diagnostics, not errors
+	// about an explicit invalid gitdir or configuration file.
+	message := strings.TrimSpace(exitErr.Stderr)
+	return message == "fatal: not a git repository (or any of the parent directories): .git" ||
+		(strings.HasPrefix(message, "fatal: not a git repository (or any parent up to mount point ") &&
+			strings.HasSuffix(message, ")\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set)."))
+}
+
+func confirmNoGitMetadata(hint string) error {
+	// Git can report absence when metadata is unreadable. Only declare absence
+	// after ruling out markers along the physical working-directory ancestry.
+	directory, err := filepath.EvalSymlinks(hint)
+	if err != nil {
+		return err
+	}
+	for {
+		marker := filepath.Join(directory, ".git")
+		if _, err := os.Lstat(marker); err == nil {
+			return fmt.Errorf("Git metadata exists at %q but repository inspection failed", marker)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect Git metadata %q: %w", marker, err)
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return nil
+		}
+		directory = parent
+	}
+}
+
+func RequireSupportedGit(ctx context.Context, git gitexec.Runner) (string, error) {
 	result, err := git.Run(ctx, ".", "--version")
 	if err != nil {
-		return fmt.Errorf("Git 2.43.1 or newer is required: %w", err)
+		return "", fmt.Errorf("Git 2.43.1 or newer is required: %w", err)
 	}
-	return validateGitVersion(string(result.Stdout))
+	if err := validateGitVersion(string(result.Stdout)); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
 func validateGitVersion(output string) error {
@@ -109,7 +166,7 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 	}
 	refResult, refErr := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "HEAD")
 	if refErr == nil {
-		ref := strings.TrimSpace(string(refResult.Stdout))
+		ref := strings.TrimSuffix(string(refResult.Stdout), "\n")
 		_, existsErr := r.Git.Run(ctx, r.Root, "show-ref", "--verify", "--quiet", ref)
 		if existsErr == nil {
 			return "", fmt.Errorf("public HEAD ref %q does not name a commit", ref)
@@ -123,14 +180,14 @@ func (r Repository) Head(ctx context.Context) (string, error) {
 }
 
 func (r Repository) Branch(ctx context.Context) (string, error) {
-	result, err := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	result, err := r.Git.Run(ctx, r.Root, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); ok && code == 1 {
 			return "", nil
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	return gitexec.ParseRefOutput(result.Stdout, "refs/heads/")
 }
 
 func (r Repository) TrackedPaths(ctx context.Context) ([]pathmodel.Path, error) {
@@ -154,9 +211,14 @@ func (r Repository) InfoExcludePath(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate public repository local exclude file: %w", err)
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
+	return gitexec.ParsePathOutput(result.Stdout)
 }
 
+// ExcludedPaths checks effective exclusion for candidate paths in a single
+// Git check-ignore invocation. Output is parsed as NUL-delimited quadruplets
+// (<source>\0<lineno>\0<pattern>\0<pathname>\0) produced by --verbose --non-matching.
+// At the maximum supported tree size of 10,000 entries, the output (~5 MiB max)
+// stays well within the 16 MiB stdout capture limit.
 func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (map[pathmodel.Path]bool, error) {
 	if len(paths) == 0 {
 		return make(map[pathmodel.Path]bool), nil
@@ -169,21 +231,15 @@ func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (
 		"--no-index",
 		"--stdin",
 		"-z",
+		"--verbose",
+		"--non-matching",
 	)
 	if err != nil {
 		if code, ok := gitexec.ExitCode(err); !ok || code != 1 {
 			return nil, fmt.Errorf("check public exclusions: %w", err)
 		}
 	}
-	ignored, err := parsePaths(result.Stdout)
-	if err != nil {
-		return nil, fmt.Errorf("parse ignored paths: %w", err)
-	}
-	set := make(map[pathmodel.Path]bool, len(ignored))
-	for _, path := range ignored {
-		set[path] = true
-	}
-	return set, nil
+	return parseCheckIgnoreOutput(result.Stdout)
 }
 
 func (r Repository) UnexcludedPaths(ctx context.Context, paths []pathmodel.Path) ([]pathmodel.Path, error) {
@@ -343,6 +399,31 @@ func parsePaths(output []byte) ([]pathmodel.Path, error) {
 	return paths, nil
 }
 
+func parseCheckIgnoreOutput(output []byte) (map[pathmodel.Path]bool, error) {
+	if len(output) == 0 {
+		return make(map[pathmodel.Path]bool), nil
+	}
+	fields := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	if len(fields)%4 != 0 {
+		return nil, fmt.Errorf("malformed check-ignore output: expected quadruplets, got %d fields", len(fields))
+	}
+	set := make(map[pathmodel.Path]bool)
+	for i := 0; i < len(fields); i += 4 {
+		pattern := fields[i+2]
+		pathname := fields[i+3]
+		if pathname == "" {
+			continue
+		}
+		path, err := pathmodel.ParseObserved(pathname)
+		if err != nil {
+			return nil, fmt.Errorf("public Git returned unusable path %q: %w", pathname, err)
+		}
+		if pattern != "" && !strings.HasPrefix(pattern, "!") {
+			set[path] = true
+		}
+	}
+	return set, nil
+}
 func swapASCIIcase(value string) string {
 	var result strings.Builder
 	result.Grow(len(value))

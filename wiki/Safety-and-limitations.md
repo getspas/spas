@@ -8,8 +8,8 @@ Please review these operational boundaries before integrating SPAS into your wor
 
 ## 1. Repository Visibility & Access Control
 
-- **Public vs. Private Repositories:** SPAS automatically verifies linked repository visibility using an offline-credential-free probe (`git ls-remote` with credential helpers and prompts disabled). If the linked repository is publicly readable, SPAS requires explicit interactive confirmation or the `--allow-public` CLI flag to prevent accidental exposure of managed assets. Always ensure your repository is configured as **Private** on GitHub before syncing sensitive files.
-- **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository, but does not alter local filesystem file permissions. Anyone with local read access to your project workspace directory can read the files.
+- **Public vs. Private Repositories:** By default, SPAS checks linked repository visibility with a networked `git ls-remote` probe that disables Git credential helpers and prompts. If the linked repository is publicly readable, SPAS requires explicit interactive confirmation or the `--allow-public` CLI flag to prevent accidental exposure of managed assets. `--allow-public` and `--dry-run` skip the probe. Always ensure your repository is configured as **Private** on GitHub before syncing sensitive files.
+- **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository. Files it materializes during sync inherit standard Git checkout semantics — created with maximal modes filtered by your process umask, exactly as `git clone` of the linked repository would produce — and only Git's executable bit is preserved across machines. Recovery copies under the SPAS data directory remain owner-only. Anyone with local read access to your project workspace directory can read the files.
 - **Git URL Rewrites:** SPAS verifies its recorded origin URL, but respects your system and global Git configuration (including `url.*.insteadOf` and `pushInsteadOf` rewrites). Ensure your global Git configuration points to trusted remotes.
 
 ---
@@ -46,7 +46,7 @@ Please review these operational boundaries before integrating SPAS into your wor
 - **Submodules & LFS Pointers:** Git submodules and Git LFS pointer files are not supported.
 - **Special Git Files:** `.gitignore`, `.gitattributes`, and `.gitmodules` cannot be managed by SPAS.
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
-- **Non-Portable Filenames:** Files with case-collision risks across Windows, macOS, and Linux are rejected.
+- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes and files with case-collision risks across Windows, macOS, and Linux are rejected on all platforms. On Windows, SPAS conservatively rejects paths when either the workspace or private-clone absolute path reaches 260 UTF-8 bytes. This byte-count preflight is stricter than the native `MAX_PATH` character limit for non-ASCII names. It is machine-local; another machine's roots are checked there, and Git or the filesystem can impose additional limits.
 
 ---
 
@@ -56,7 +56,7 @@ The local exclusion block inside `.git/info/exclude` prevents standard Git opera
 
 > [!WARNING]
 >
-> - **`.gitignore` Negation Precedence:** In Git, negation rules (`!pattern`) inside `.gitignore` or global `core.excludesFile` override exclusions in `.git/info/exclude`. If a project `.gitignore` contains a rule like `!*.json` or `!config/dev.json`, SPAS's `verifyExclusion` safety probe detects that the asset is no longer effectively ignored and halts immediately with exit code 9 (`exclusion_validation_failed`) to prevent accidental tracking by the main repository.
+> - **`.gitignore` Negation Precedence:** Git gives project `.gitignore` rules higher precedence than `.git/info/exclude`, which takes precedence over the global `core.excludesFile`. If a project `.gitignore` contains a negation such as `!*.json` or `!config/dev.json`, SPAS's `verifyExclusion` safety probe detects that the asset is no longer effectively ignored and halts with exit code 9 (`exclusion_validation_failed`).
 > - `git add -f` (force add) will bypass exclusion rules and stage private assets in your main repository.
 > - Destructive Git commands like `git clean -xdf`, forced checkouts (`git checkout -f`), or hard resets (`git reset --hard`) can delete or overwrite excluded files.
 > - **Best Practice:** Run `spas sync` before performing destructive Git operations, and review `git status` before committing.
@@ -71,7 +71,8 @@ SPAS enforces safety limits to prevent runaway resource consumption:
 | :--- | :--- |
 | **Managed Tree Size** | Up to **10,000 recursive file entries** |
 | **Tree Metadata** | Up to **16 MiB** captured tree metadata |
-| **Git Command Output** | Up to **16 MiB stdout** and **1 MiB stderr** |
+| **Captured Git Command Output** | Up to **16 MiB stdout** and **1 MiB stderr** |
+| **Streaming Git Command Output** | Full output forwarded; last **64 KiB per stream** retained for diagnostics |
 
 SPAS does not place hard quotas on individual blob sizes or overall network transfers, though large assets are constrained by available disk space and network bandwidth.
 

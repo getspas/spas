@@ -2,8 +2,11 @@ package githubref
 
 import (
 	"context"
+	"errors"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/provider"
@@ -19,9 +22,13 @@ func TestProviderResolve(t *testing.T) {
 		want      provider.RepositoryRef
 	}{
 		{"slug", "getspas/private-files", provider.HTTPS, provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
+		{"slug mixed case", "GetSpas/Private-Files", provider.HTTPS, provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
 		{"https", "https://github.com/getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
+		{"https mixed case", "https://github.com/GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.HTTPS, RemoteURL: "https://github.com/getspas/private-files.git"}},
 		{"ssh", "git@github.com:getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
+		{"ssh mixed case", "git@github.com:GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
 		{"ssh URL", "ssh://git@github.com/getspas/private-files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
+		{"ssh URL mixed case", "ssh://git@github.com/GetSpas/Private-Files.git", "", provider.RepositoryRef{Provider: ID, Canonical: "getspas/private-files", Transport: provider.SSH, RemoteURL: "git@github.com:getspas/private-files.git"}},
 	}
 	for _, test := range tests {
 		test := test
@@ -102,5 +109,58 @@ func TestProbePublic(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ProbePublic(canceled) error = nil, want context error")
+	}
+
+	// Timed out context
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer timeoutCancel()
+	_, err = (Provider{}).ProbePublic(timeoutCtx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: "file://" + dir + "/public.git",
+	})
+	if err == nil {
+		t.Fatal("ProbePublic(timeout) error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ProbePublic(timeout) error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestProbePublicIgnoresLocalGitConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	git := gitexec.Runner{}
+
+	dir := t.TempDir()
+	bareDir := filepath.Join(dir, "public.git")
+	cmd := exec.Command("git", "init", "--bare", "-q", bareDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	localRepo := filepath.Join(dir, "localrepo")
+	cmd = exec.Command("git", "init", "-q", localRepo)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	targetURL := "file://" + filepath.ToSlash(bareDir)
+	// Configure local repo to rewrite the target URL to a nonexistent path.
+	cmd = exec.Command("git", "-C", localRepo, "config", "url.file:///nonexistent-path-12345/.insteadOf", targetURL)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// ProbePublic should run in a neutral directory outside localrepo and ignore its local config.
+	isPublic, err := (Provider{}).ProbePublic(ctx, git, provider.RepositoryRef{
+		Provider:  ID,
+		Canonical: "local/public",
+		RemoteURL: targetURL,
+	})
+	if err != nil || !isPublic {
+		t.Fatalf("ProbePublic(local repo config rewrite) = %v, %v, want true, nil", isPublic, err)
 	}
 }

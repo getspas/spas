@@ -11,11 +11,12 @@ The following flags apply to all SPAS commands:
 | Option | Type | Description |
 | :--- | :--- | :--- |
 | `--repo PATH` | String | Path to the project Git workspace directory (defaults to `.`) |
-| `--git PATH` | String | Custom path to the Git executable |
+| `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
 | `--non-interactive` | Flag | Disable interactive prompts; fails if any required decision flag is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
+| `--timeout DURATION` | String | Maximum execution duration (e.g. `30s`, `5m`; default: no timeout) |
 | `-h, --help` | Flag | Display help information for the command |
 | `--version` | Flag | Display version information (root command only) |
 
@@ -32,15 +33,15 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. It verifies repository visibility using an anonymous probe and prompts for confirmation if the repository is publicly readable.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. By default it runs a networked visibility probe with Git credential helpers and prompts disabled, then prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--allow-public` and `--dry-run` both skip the probe. Owner and repository names are case-insensitive and canonicalized to lowercase.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--transport` | `https` \| `ssh` | *Prompt* / `https` | Git transport protocol for `OWNER/REPOSITORY` references (defaults to `https` in non-interactive mode) |
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
-| `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving |
-| `--allow-public` | Flag | `false` | Allow linking a publicly readable repository without confirmation |
+| `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving or network access |
+| `--allow-public` | Flag | `false` | Accept public-repository risk and skip the visibility probe (approval is recorded in link state; later syncs skip the probe) |
 
 ### Link Examples
 
@@ -66,6 +67,9 @@ spas add PATH... [flags]
 ```
 
 `spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged.
+
+Accepted filesystem aliases are enrolled using the actual directory-entry case
+and Unicode NFC spelling. This is the spelling used in state and exclusion rules.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -149,7 +153,20 @@ SPAS never creates commits in your project repository.
 | `--continue` | Flag | `false` | Continue a merge in the linked repository after resolving conflicts |
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
-| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation |
+| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
+
+### Verified Merge Protection
+
+SPAS verifies `branch.<name>.mergeOptions` only when there is one value stored
+directly in the repository config file containing `--no-overwrite-ignore`. It may also
+contain `--no-edit`, `--log`, and `--no-ff`, separated by ASCII whitespace.
+With these flags, `enable` preserves the original local value for unlink
+restoration and adds `--no-overwrite-ignore` when needed.
+
+Multiple values, included values, non-local scopes, quoted or argument-taking options,
+`--overwrite-ignore`, and other flags are reported as unverified. `require`
+and `enable` reject that configuration. Configure a single supported local
+value before using those policies; `skip` leaves merge protection to you.
 
 ### Sync Examples
 
@@ -199,6 +216,23 @@ spas status --show-paths
 
 Compare managed assets in your local project workspace against the local managed checkout.
 
+File selection reads Git configuration and existing file metadata; it does not
+create a workspace probe file. Exact stored spellings take priority. Case aliases
+match when `core.ignoreCase` is true or existing file identities prove they refer
+to the same file. An unset `core.ignoreCase` defaults to false. Missing case aliases
+therefore require `core.ignoreCase=true`; exact missing paths remain selectable
+for pending removals and staged deletions.
+
+Accepted aliases select the authoritative enrolled filename in JSON, name-only,
+patch, and stat output, including `--staged`. The original selected spelling is
+checked before accepting a case or Unicode-normalization alias: a distinct
+existing neighbor cannot select the enrolled file. An explicit file selection
+that matches no candidate produces an empty result.
+Staged renames expose both their source and destination as selectable paths;
+unfiltered patch output keeps Git's normal rename presentation.
+Use an exact stored spelling when an alias could refer to both sides of a
+case-only rename.
+
 ```text
 spas diff [PATH...] [flags]
 ```
@@ -224,6 +258,8 @@ spas doctor [flags]
 
 - When run with `--json`, `spas doctor` outputs a single diagnostic JSON object to stdout.
 - Returns exit code `0` when healthy, or nonzero when issues require attention.
+- When no Git repository is found, or the repository is not linked, `doctor` runs the available environment checks (Git version, data directories, advisory locking, and worktree shape where applicable). If those checks pass, it exits `0` with a `workspace` or `link-state` warning explaining that link checks were skipped.
+- Failed repository inspection is an error. Corrupt configuration, unreadable or unrecognized Git metadata, cancellation, and invalid Git output produce an unhealthy result and nonzero status. A no-repository warning requires Git's absence diagnostic and no `.git` marker in the physical directory ancestry; existing metadata that Git cannot inspect requires attention.
 
 ---
 
@@ -279,12 +315,15 @@ spas version
 
 ---
 
-## Exit Codes & Errors
+## Exit Codes, JSON Schemas & Errors
 
-When using `--json`, errors are returned as structured JSON objects:
+When using `--json`, all responses (including errors) adhere to the versioned [JSON Output Schema](JSON-output-schema).
+
+Errors are returned as structured JSON objects with `schemaVersion`:
 
 ```json
 {
+  "schemaVersion": 1,
   "ok": false,
   "error": {
     "code": "decision_required",
@@ -304,9 +343,14 @@ When using `--json`, errors are returned as structured JSON objects:
 | `4` | `decision_required` | Required decision missing in non-interactive mode (e.g. `--message` or `--conflict`). |
 | `5` | `path_conflict` | Path collision with a file tracked by the main project Git repository. |
 | `6` | `private_merge_conflict` | Merge conflict in the linked repository. Resolve conflicts, then run `spas sync --continue`. |
-| `7` | `github_auth_or_network` | Git authentication or network failure when contacting GitHub. |
+| `7` | `auth_or_network` | Git authentication or network failure when contacting remote provider. |
 | `8` | `unsafe_git_state` | Unsafe Git state detected (detached HEAD, uncommitted project merge, multiple worktrees). |
 | `9` | `exclusion_validation_failed` | `.git/info/exclude` does not match SPAS state or tracked `.gitignore` conflicts. |
 | `10` | `lock_held` | Another SPAS process is holding the link advisory lock. |
 | `11` | `unsupported_path` | Path is not a regular file (symlinks, junctions, control characters, or invalid encodings). |
 | `130` | `interrupted` | Execution cancelled by user interrupt (Ctrl+C / SIGINT). |
+
+The intended result for `--timeout` expiry is exit code `1` (`operation_failed`).
+A known limitation remains: deadlines wrapped by remote Git operations can
+currently return exit code `7` (`auth_or_network`). User signals return exit
+code `130` (`interrupted`).

@@ -1,25 +1,29 @@
 package app
 
-// Regression tests for the defects found during the pre-release review.
-// Each test names the finding it locks in.
+// Regression coverage for asset ownership, synchronization, and recovery.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/limits"
 	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/spaserr"
 )
@@ -38,6 +42,8 @@ func fixture(t *testing.T) (App, string, string, string) {
 	runGit(t, publicRoot, "init", "-q", "-b", "main")
 	runGit(t, publicRoot, "config", "user.name", "SPAS Test")
 	runGit(t, publicRoot, "config", "user.email", "spas@example.invalid")
+	runGit(t, publicRoot, "config", "commit.gpgsign", "false")
+	runGit(t, publicRoot, "config", "tag.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(publicRoot, "README.md"), []byte("public\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +498,33 @@ func TestAddReportsOnlyNewlyEnrolledPaths(t *testing.T) {
 	}
 }
 
-// F1: an ownership override without a private replacement must refuse rather
+func TestAddDryRunRejectsPrivateTreeAboveLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	instance, publicRoot, _, _ := fixture(t)
+	state := loadState(t, instance, publicRoot)
+	state.ManagedPaths = make([]string, limits.MaxPrivateTreeEntries)
+	for index := range state.ManagedPaths {
+		state.ManagedPaths[index] = fmt.Sprintf("managed/%05d.txt", index)
+	}
+	saveState(t, instance, state)
+
+	if err := os.WriteFile(filepath.Join(publicRoot, "overflow.txt"), []byte("overflow\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := instance.Add(ctx, AddOptions{
+		Paths:           []string{"overflow.txt"},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+		DryRun:          true,
+	})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(limits.MaxPrivateTreeEntries)) {
+		t.Fatalf("Add(dry-run) error = %v, want private-tree limit %d", err, limits.MaxPrivateTreeEntries)
+	}
+}
+
+// An ownership override without a private replacement must refuse rather
 // than delete the only copy of the file.
 func TestOverrideRefusesWithoutPrivateReplacement(t *testing.T) {
 	t.Parallel()
@@ -538,7 +570,7 @@ func TestOverrideRefusesWithoutPrivateReplacement(t *testing.T) {
 	}
 }
 
-// F2a: sync --abort must rebuild the exclude block from the paths it actually
+// Sync --abort must rebuild the exclude block from the paths it actually
 // materializes, never from stale link state.
 func TestAbortKeepsEveryMaterializedPathExcluded(t *testing.T) {
 	t.Parallel()
@@ -582,7 +614,7 @@ func TestAbortKeepsEveryMaterializedPathExcluded(t *testing.T) {
 	}
 }
 
-// F3: an edit made after `spas remove` must defer the removal, not be
+// An edit made after `spas remove` must defer the removal, not be
 // destroyed by it.
 func TestRemoveThenEditDefersTheRemoval(t *testing.T) {
 	t.Parallel()
@@ -598,9 +630,17 @@ func TestRemoveThenEditDefersTheRemoval(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(publicRoot, ".env"), []byte("TOKEN=brand-new\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, syncOptions("attempt removal")); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"deferredRemovals", "managedFiles", "privateCommitCreated", "publicRemovalsStaged",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "deferredRemovals", "publicRemovalsStaged", "skippedConflicts")
 
 	content, err := os.ReadFile(filepath.Join(publicRoot, ".env"))
 	if err != nil || string(content) != "TOKEN=brand-new\n" {
@@ -651,7 +691,7 @@ func TestRemoveThenExecutableModeChangeDefersTheRemoval(t *testing.T) {
 	}
 }
 
-// F4: both override forms must save a recovery copy of what they discard.
+// Both override forms must save a recovery copy of what they discard.
 func TestOverrideSavesRecoveryCopies(t *testing.T) {
 	t.Parallel()
 
@@ -671,9 +711,17 @@ func TestOverrideSavesRecoveryCopies(t *testing.T) {
 	}
 	options := syncOptions("")
 	options.Conflict = ConflictOverride
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, options); err != nil {
 		t.Fatalf("Sync(override obstruction) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"managedFiles", "privateCommitCreated", "publicRemovalsStaged", "recoveryCopies",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "publicRemovalsStaged", "skippedConflicts")
 	if content, err := os.ReadFile(obstruction); err != nil || string(content) != "private,rows\n" {
 		t.Fatalf("data/report.csv = %q, %v; want the private version", content, err)
 	}
@@ -727,7 +775,7 @@ func findRecoveryCopy(t *testing.T, dataDir, content string) bool {
 	return found
 }
 
-// F7: a pending addition whose file is temporarily missing keeps its
+// A pending addition whose file is temporarily missing keeps its
 // enrollment and its exclusion entry.
 func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	t.Parallel()
@@ -755,9 +803,17 @@ func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	if err := os.Remove(secret); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, syncOptions("")); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"deferredAdditions", "managedFiles", "privateCommitCreated", "publicRemovalsStaged",
+		"schemaVersion", "skippedConflicts", "synchronized",
+	})
+	assertNoNullArrays(t, out.Bytes(), "deferredAdditions", "publicRemovalsStaged", "skippedConflicts")
 
 	block := readExcludeBlock(t, publicRoot)
 	if !strings.Contains(block, "/config/secret.json") {
@@ -769,7 +825,7 @@ func TestMissingPendingAddKeepsEnrollmentAndExclusion(t *testing.T) {
 	}
 }
 
-// F5: the executable bit survives the round trip through the private clone.
+// The executable bit survives the round trip through the private clone.
 func TestExecutableBitSurvivesRoundTrip(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -806,7 +862,142 @@ func TestExecutableBitSurvivesRoundTrip(t *testing.T) {
 	}
 }
 
-// F6: a sync interrupted between push and materialization must finish
+func TestMaterializePermissionsInheritCheckoutPolicy(t *testing.T) {
+	t.Parallel()
+
+	var wantPlain, wantExec, wantDir os.FileMode
+	if runtime.GOOS != "windows" {
+		controlRoot := t.TempDir()
+		control := func(name string, mode os.FileMode) os.FileMode {
+			t.Helper()
+			file, err := os.OpenFile(filepath.Join(controlRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := file.Stat()
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			return info.Mode().Perm()
+		}
+		wantPlain = control("plain", 0o666)
+		wantExec = control("tool", 0o777)
+		if err := os.Mkdir(filepath.Join(controlRoot, "dir"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+		dirInfo, err := os.Stat(filepath.Join(controlRoot, "dir"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantDir = dirInfo.Mode().Perm()
+	}
+
+	ctx := context.Background()
+	instance, publicRoot, root, remote := fixture(t)
+
+	// Teammate commits a plain file and an executable script into subdirectories.
+	clone := filepath.Join(root, "teammate-clone")
+	_ = os.RemoveAll(clone)
+	runGit(t, root, "clone", "-q", remote, clone)
+	runGit(t, clone, "config", "user.name", "Teammate")
+	runGit(t, clone, "config", "user.email", "teammate@example.invalid")
+	if remoteHead := gitOutputAllowFail(t, clone, "rev-parse", "--verify", "-q", "refs/remotes/origin/main"); remoteHead != "" {
+		runGit(t, clone, "checkout", "-q", "-B", "main", "origin/main")
+	} else if head := gitOutputAllowFail(t, clone, "rev-parse", "--verify", "-q", "HEAD"); head == "" {
+		runGit(t, clone, "checkout", "-q", "-b", "main")
+	}
+	plainFull := filepath.Join(clone, "config", "plain.json")
+	if err := os.MkdirAll(filepath.Dir(plainFull), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plainFull, []byte("{\"k\":\"v\"}\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	execFull := filepath.Join(clone, "bin", "tool.sh")
+	if err := os.MkdirAll(filepath.Dir(execFull), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execFull, []byte("#!/bin/sh\nexit 0\n"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(execFull, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, clone, "add", "--force", "--", "config/plain.json", "bin/tool.sh")
+	runGit(t, clone, "commit", "-q", "-m", "teammate plain and exec")
+	runGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	if err := instance.Sync(ctx, syncOptions("sync remote additions")); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	// POSIX materialization modes follow checkout and umask policy.
+	if runtime.GOOS != "windows" {
+		plainInfo, err := os.Stat(filepath.Join(publicRoot, "config", "plain.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := plainInfo.Mode().Perm(); got != wantPlain {
+			t.Errorf("materialized plain file mode = %o, want %o", got, wantPlain)
+		}
+
+		execInfo, err := os.Stat(filepath.Join(publicRoot, "bin", "tool.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := execInfo.Mode().Perm(); got != wantExec {
+			t.Errorf("materialized exec file mode = %o, want %o", got, wantExec)
+		}
+
+		configDirInfo, err := os.Stat(filepath.Join(publicRoot, "config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := configDirInfo.Mode().Perm(); got != wantDir {
+			t.Errorf("materialized config dir mode = %o, want %o", got, wantDir)
+		}
+
+		binDirInfo, err := os.Stat(filepath.Join(publicRoot, "bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := binDirInfo.Mode().Perm(); got != wantDir {
+			t.Errorf("materialized bin dir mode = %o, want %o", got, wantDir)
+		}
+	}
+
+	// Verify SPAS configuration state remains present and owner-only.
+	statePath := filepath.Join(instance.Store.ConfigDir, "links")
+	stateFiles := 0
+	if err := filepath.WalkDir(statePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(path) == ".json" {
+			stateFiles++
+		}
+		if runtime.GOOS != "windows" {
+			if got := info.Mode().Perm(); got&0o077 != 0 {
+				t.Errorf("SPAS configuration state %s mode = %o, want no group/other access", path, got)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk link-state directory: %v", err)
+	}
+	if stateFiles == 0 {
+		t.Fatal("link-state directory contains no state files")
+	}
+}
+
+// A sync interrupted between push and materialization must finish
 // materializing before workspace state is read as local edits, so a
 // teammate's pushed change is never silently reverted.
 func TestInterruptedMaterializationResumesBeforeCommitting(t *testing.T) {
@@ -1073,9 +1264,15 @@ func TestMergeContinuationRetainsApprovedObstructionRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(publicRoot, "conflict.txt"), []byte("resolved\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "resolve conflict"}); err != nil {
 		t.Fatalf("Sync(continue) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"mergeContinued", "recoveryCopies", "schemaVersion", "synchronized",
+	})
 	content, err := os.ReadFile(obstructionPath)
 	if err != nil || string(content) != "private replacement\n" {
 		t.Fatalf("materialized obstruction path = %q, %v", content, err)
@@ -1182,9 +1379,15 @@ func TestGitNativeAbortRecoversMergeWithoutSPASState(t *testing.T) {
 	if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "must not continue"}); err == nil || !strings.Contains(err.Error(), "abort") {
 		t.Fatalf("Sync(--continue) error = %v, want abort-required guidance", err)
 	}
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Abort: true}); err != nil {
 		t.Fatalf("Sync(--abort) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"gitNativeRecovery", "mergeAborted", "schemaVersion",
+	})
 	merging, err := instance.privateRepository(state).MergeInProgress()
 	if err != nil {
 		t.Fatal(err)
@@ -1243,9 +1446,15 @@ func TestAbortOnlyMergeRecoveryClearsStateWithoutPanic(t *testing.T) {
 	state.Private.ExpectedHead = preMergeHead
 	saveState(t, instance, state)
 
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
+	instance.JSON = true
 	if err := instance.Sync(ctx, SyncOptions{Abort: true}); err != nil {
 		t.Fatalf("Sync(abort) error = %v", err)
 	}
+	assertJSONContract(t, out.Bytes(), []string{
+		"mergeAborted", "mergeRecoveryCleared", "schemaVersion",
+	})
 	reloaded := loadState(t, instance, publicRoot)
 	if reloaded.ActiveMerge != nil {
 		t.Fatalf("abort-only recovery state remains: %#v", reloaded.ActiveMerge)
@@ -1434,7 +1643,7 @@ func TestFailedAutomaticMergeAbortRetainsRecoveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-write-tree-and-abort")
+	enableGitProxy(t, "fail-write-tree-and-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	instance.Git.Path = os.Args[0]
 	err = instance.Sync(ctx, SyncOptions{Continue: true, Message: "resolve conflict"})
@@ -1536,7 +1745,7 @@ func TestAutomaticMergeAbortRetainsRecoveryStateWhenMarkerCannotBeInspected(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-write-tree-and-recreate-marker")
+	enableGitProxy(t, "fail-write-tree-and-recreate-marker")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_MERGE_MARKER", marker)
 	instance.Git.Path = os.Args[0]
@@ -1579,7 +1788,7 @@ func TestMergeAbortRetainsRecoveryStateWhenMergeMarkerCannotBeInspected(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "recreate-marker-after-abort")
+	enableGitProxy(t, "recreate-marker-after-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_MERGE_MARKER", marker)
 	instance.Git.Path = os.Args[0]
@@ -1619,7 +1828,7 @@ func TestMergeAbortRejectsDirtyPrivateCloneBeforeMaterialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-private-on-abort-tracked-paths")
+	enableGitProxy(t, "edit-private-on-abort-tracked-paths")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", privatePath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "dirty private abort source\n")
@@ -1670,7 +1879,7 @@ func TestMergeAbortRejectsWorkspaceEditDuringGitAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-on-private-abort")
+	enableGitProxy(t, "edit-on-private-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", conflictPath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "edit during abort\n")
@@ -1723,7 +1932,7 @@ func TestMergeAbortRejectsWorkspaceEditAfterGitAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-after-private-abort")
+	enableGitProxy(t, "edit-after-private-abort")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_ABORT_MARKER", filepath.Join(root, "abort-completed"))
 	t.Setenv("SPAS_APP_EDIT_PATH", conflictPath)
@@ -2197,7 +2406,7 @@ func TestOwnershipOverrideRejectsEditDuringPublicUntracking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SPAS_APP_GIT_PROXY", "edit-on-public-rm")
+	enableGitProxy(t, "edit-on-public-rm")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_EDIT_PATH", publicPath)
 	t.Setenv("SPAS_APP_EDIT_CONTENT", "late public edit\n")
@@ -2332,7 +2541,7 @@ func TestStructuredNonFastForwardRetryIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	countPath := filepath.Join(root, "push-attempts")
-	t.Setenv("SPAS_APP_GIT_PROXY", "fail-push-nff")
+	enableGitProxy(t, "fail-push-nff")
 	t.Setenv("SPAS_APP_REAL_GIT", realGit)
 	t.Setenv("SPAS_APP_PUSH_COUNT", countPath)
 	instance.Git.Path = os.Args[0]
@@ -2576,7 +2785,7 @@ func TestJSONCommitApprovalFailureWritesNoProse(t *testing.T) {
 	}
 }
 
-// F23: a case-only conflict with exactly one public and one private spelling
+// A case-only conflict with exactly one public and one private spelling
 // can be overridden: the public spelling is removed (staged, uncommitted) and
 // the private spelling is materialized.
 func TestCaseOnlyOverride(t *testing.T) {
@@ -2633,7 +2842,7 @@ func TestCaseOnlyOverride(t *testing.T) {
 	}
 }
 
-// F12: names a public repository may legally track (Windows-reserved,
+// Names a public repository may legally track (Windows-reserved,
 // colon-bearing) must never make SPAS unusable.
 func TestPublicTrackedNonPortableNamesDoNotBreakCommands(t *testing.T) {
 	t.Parallel()
@@ -2652,7 +2861,7 @@ func TestPublicTrackedNonPortableNamesDoNotBreakCommands(t *testing.T) {
 	}
 }
 
-// F22 (non-interactive form): the tracked-path error explains the required
+// The non-interactive tracked-path error explains the required
 // ownership change without constructing a shell command from the path.
 func TestAddTrackedPathExplainsOwnershipConflict(t *testing.T) {
 	t.Parallel()
@@ -2784,7 +2993,7 @@ func TestAddAndRemoveRevalidateEveryManagedExclusion(t *testing.T) {
 	}
 }
 
-// F24: a case-only ownership override must survive an unrelated private merge
+// A case-only ownership override must survive an unrelated private merge
 // conflict. Active merge state stores the public spelling, while continuation
 // derives and materializes the private spelling from the private index.
 func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
@@ -2858,7 +3067,7 @@ func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
 	}
 }
 
-// F27: if the developer explicitly commits the public ownership removal while
+// If the developer explicitly commits the public ownership removal while
 // resolving an unrelated private merge, continuation must not run git rm on a
 // path the public index no longer owns. The approved private replacement is
 // still materialized and excluded locally.
@@ -2970,7 +3179,7 @@ func TestOverrideContinuationAcceptsUnchangedApprovedDirtyStatus(t *testing.T) {
 	}
 }
 
-// F25: recovery state and Git merge metadata must agree. If somebody cleans or
+// Recovery state and Git merge metadata must agree. If somebody cleans or
 // aborts the SPAS-managed private merge out of band, normal sync must not read
 // conflict-marker workspace files as fresh private edits.
 func TestSyncRejectsActiveMergeStateWithoutGitMerge(t *testing.T) {
@@ -2990,7 +3199,7 @@ func TestSyncRejectsActiveMergeStateWithoutGitMerge(t *testing.T) {
 	}
 }
 
-// F26: private merge-conflict files copied into the public workspace are part
+// Private merge-conflict files copied into the public workspace are part
 // of unlink's removal/reporting set even when the remote introduced them and
 // they never reached ManagedPaths.
 func TestUnlinkWorkspacePathsIncludesActiveMergeConflicts(t *testing.T) {
@@ -3010,5 +3219,77 @@ func TestUnlinkWorkspacePathsIncludesActiveMergeConflicts(t *testing.T) {
 	want := []string{"managed.txt", "remote/new-conflict.txt"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unlinkWorkspacePaths() = %v, want %v", got, want)
+	}
+}
+
+func TestSyncTimesOutWhenGitNetworkStalls(t *testing.T) {
+	t.Parallel()
+
+	instance, publicRoot, _, _ := fixture(t)
+	path := filepath.Join(publicRoot, "secret.txt")
+	if err := os.WriteFile(path, []byte("secret content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Add(context.Background(), AddOptions{
+		Paths:           []string{"secret.txt"},
+		ExistingExclude: ExcludePreserve,
+		MergeProtection: MergeSkip,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	time.Sleep(1 * time.Millisecond)
+	defer cancel()
+
+	err := instance.Sync(timeoutCtx, syncOptions("sync with timeout"))
+	if err == nil {
+		t.Fatal("Sync() error = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("Sync() error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestDoctorConcurrentLockProbe(t *testing.T) {
+	t.Parallel()
+
+	lockDir := filepath.Join(t.TempDir(), "locks")
+	const concurrency = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrency)
+
+	for i := range concurrency {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// Simulate distinct process PIDs for concurrent doctor probe executions
+			name := fmt.Sprintf(".doctor-probe-%d", 20000+id)
+			testLock, err := lock.Acquire(lockDir, name)
+			if err != nil {
+				errs <- fmt.Errorf("concurrent probe %d acquire failed: %w", id, err)
+				return
+			}
+			releaseErr := testLock.Release()
+			removeErr := os.Remove(filepath.Join(lockDir, name+".lock"))
+			if releaseErr != nil {
+				errs <- fmt.Errorf("concurrent probe %d release failed: %w", id, releaseErr)
+				return
+			}
+			_ = removeErr
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("unexpected error in concurrent lock probe: %v", err)
+		}
+	}
+
+	// Also verify that checkLockAcquirable runs cleanly on this lockDir
+	if err := checkLockAcquirable(lockDir); err != nil {
+		t.Fatalf("checkLockAcquirable() error = %v", err)
 	}
 }

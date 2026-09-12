@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -43,10 +44,8 @@ func (Provider) Resolve(request provider.RepositoryRequest) (provider.Repository
 		if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
 			return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain a query string or fragment")
 		}
-		if parsed.User != nil {
-			if _, present := parsed.User.Password(); present {
-				return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain credentials")
-			}
+		if _, present := parsed.User.Password(); present {
+			return provider.RepositoryRef{}, fmt.Errorf("repository URL must not contain credentials")
 		}
 		if request.Transport != "" && request.Transport != provider.SSH {
 			return provider.RepositoryRef{}, fmt.Errorf("repository URL uses SSH but --transport is %q", request.Transport)
@@ -82,13 +81,15 @@ func fromPath(value string, transport provider.Transport) (provider.RepositoryRe
 	if len(parts) != 2 || !componentPattern.MatchString(parts[0]) || !componentPattern.MatchString(parts[1]) {
 		return provider.RepositoryRef{}, fmt.Errorf("GitHub repository must be OWNER/REPOSITORY")
 	}
-	if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+	owner := strings.ToLower(parts[0])
+	repo := strings.ToLower(parts[1])
+	if owner == "." || owner == ".." || repo == "." || repo == ".." {
 		return provider.RepositoryRef{}, fmt.Errorf("invalid GitHub repository")
 	}
 	if transport != provider.HTTPS && transport != provider.SSH {
 		return provider.RepositoryRef{}, fmt.Errorf("transport must be https or ssh")
 	}
-	canonical := parts[0] + "/" + parts[1]
+	canonical := owner + "/" + repo
 	remoteURL := "https://github.com/" + canonical + ".git"
 	if transport == provider.SSH {
 		remoteURL = "git@github.com:" + canonical + ".git"
@@ -114,12 +115,12 @@ func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provide
 	}
 	probeGit := git
 	probeGit.NonInteractive = true
-	_, err := probeGit.Run(ctx, ".", "-c", "credential.helper=", "ls-remote", url)
+	_, err := probeGit.Run(ctx, os.TempDir(), "-c", "credential.helper=", "ls-remote", url)
 	if err == nil {
 		return true, nil
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, ctxErr
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 	return false, nil
 }

@@ -49,9 +49,9 @@ spas doctor --json
 
 ---
 
-### `github_auth_or_network` (Exit Code 7)
+### `auth_or_network` (Exit Code 7)
 
-- **Cause:** Git was unable to authenticate with GitHub or encountered a network timeout.
+- **Cause:** Git was unable to authenticate with the remote repository or encountered a network timeout.
 - **Fix:**
   - Verify your SSH keys (`ssh -T git@github.com`) or HTTPS credential helper.
   - Confirm repository permissions for your GitHub user account.
@@ -84,7 +84,7 @@ spas doctor --json
 
 ### `exclusion_validation_failed` (Exit Code 9)
 
-- **Cause:** A managed path is not effectively excluded from the project's primary Git repository. This typically happens when a `.gitignore` file (or a global `core.excludesFile`) contains a negation pattern (`!path` or `!*.json`) that re-includes a path. Because Git evaluates `.gitignore` with higher precedence than `.git/info/exclude`, the negation rule defeats SPAS's local exclusion block.
+- **Cause:** A managed path is not effectively excluded from the project's primary Git repository. This can happen when a project `.gitignore` contains a negation pattern (`!path` or `!*.json`) that re-includes a path. Project `.gitignore` rules take precedence over `.git/info/exclude`, which takes precedence over the global `core.excludesFile`.
 - **Why SPAS Fails Closed:** If SPAS allowed materialization while a negation rule was active, standard Git commands (`git status`, `git add .`, `git commit`) in your main project repository would track and stage your private assets. SPAS verifies effective exclusion via `git check-ignore --no-index` before mutating the workspace and halts immediately if any managed path is not effectively ignored.
 - **How to Diagnose & Fix:**
   1. Identify which rule is re-including the path:

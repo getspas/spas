@@ -18,9 +18,9 @@ SPAS (pronounced **"/spæz/"**) seamlessly connects your local workspace to a se
 
 ---
 
-Every project relies on files that don't belong in the public or shared Git repository: local `.env` secrets, developer overrides, test fixtures, API mocks, and internal team notes.
+Every project relies on files that don't belong in the public or shared Git repository: local `.env` files, developer overrides, test fixtures, API mocks, and internal team notes.
 
-Moving these files elsewhere breaks build paths. Copying them manually across machines is slow and error-prone. Committing them risks secret leaks and repo bloat.
+Moving these files elsewhere breaks build paths. Copying them manually across machines is slow and error-prone. Committing them exposes them to every collaborator and bloats history.
 
 **SPAS solves this by bridging the gap:**
 
@@ -114,7 +114,7 @@ spas sync
 
 ### 3. Workflow Summary
 
-1. **`spas link`** — Connects your project workspace to the dedicated asset repository (offline).
+1. **`spas link`** — Connects your project workspace to the dedicated asset repository and warns when that repository is publicly readable.
 2. **`spas add`** — Tracks chosen files and creates local exclusion rules in `.git/info/exclude` (offline).
 3. **`spas sync`** — Validates, commits, merges, and synchronizes assets with GitHub.
 

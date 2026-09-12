@@ -371,6 +371,9 @@ Emitted when the private clone has not been initialized yet:
 
 - `stagedPaths` is an empty array (`[]`) when nothing is staged.
 
+See the [Diff command reference](Command-reference.md#spas-diff) for file-selection,
+alias, and staged-rename behavior shared by JSON and text output.
+
 ---
 
 ### `spas doctor`

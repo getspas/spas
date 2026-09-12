@@ -68,6 +68,9 @@ spas add PATH... [flags]
 
 `spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged.
 
+Accepted filesystem aliases are enrolled using the actual directory-entry case
+and Unicode NFC spelling. This is the spelling used in state and exclusion rules.
+
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--existing-exclude` | `ask` \| `preserve` \| `abort` | `ask` | How to handle existing rules in `.git/info/exclude` |
@@ -213,6 +216,23 @@ spas status --show-paths
 
 Compare managed assets in your local project workspace against the local managed checkout.
 
+File selection reads Git configuration and existing file metadata; it does not
+create a workspace probe file. Exact stored spellings take priority. Case aliases
+match when `core.ignoreCase` is true or existing file identities prove they refer
+to the same file. An unset `core.ignoreCase` defaults to false. Missing case aliases
+therefore require `core.ignoreCase=true`; exact missing paths remain selectable
+for pending removals and staged deletions.
+
+Accepted aliases select the authoritative enrolled filename in JSON, name-only,
+patch, and stat output, including `--staged`. The original selected spelling is
+checked before accepting a case or Unicode-normalization alias: a distinct
+existing neighbor cannot select the enrolled file. An explicit file selection
+that matches no candidate produces an empty result.
+Staged renames expose both their source and destination as selectable paths;
+unfiltered patch output keeps Git's normal rename presentation.
+Use an exact stored spelling when an alias could refer to both sides of a
+case-only rename.
+
 ```text
 spas diff [PATH...] [flags]
 ```
@@ -238,7 +258,8 @@ spas doctor [flags]
 
 - When run with `--json`, `spas doctor` outputs a single diagnostic JSON object to stdout.
 - Returns exit code `0` when healthy, or nonzero when issues require attention.
-- Outside a Git repository, or in a repository that is not linked, `doctor` runs the environment checks it can (Git version, data directories, advisory locking, and — inside a repository — worktree shape) and exits `0` with a warning notice (`workspace` when not in a Git repository, or `link-state` when unlinked) explaining that link checks were skipped.
+- When no Git repository is found, or the repository is not linked, `doctor` runs the available environment checks (Git version, data directories, advisory locking, and worktree shape where applicable). If those checks pass, it exits `0` with a `workspace` or `link-state` warning explaining that link checks were skipped.
+- Failed repository inspection is an error. Corrupt configuration, unreadable or unrecognized Git metadata, cancellation, and invalid Git output produce an unhealthy result and nonzero status. A no-repository warning requires Git's absence diagnostic and no `.git` marker in the physical directory ancestry; existing metadata that Git cannot inspect requires attention.
 
 ---
 
@@ -329,4 +350,7 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 | `11` | `unsupported_path` | Path is not a regular file (symlinks, junctions, control characters, or invalid encodings). |
 | `130` | `interrupted` | Execution cancelled by user interrupt (Ctrl+C / SIGINT). |
 
-When `--timeout` expires, the interrupted operation fails with exit code `1` (`operation_failed`); exit code `130` remains reserved for user signals.
+The intended result for `--timeout` expiry is exit code `1` (`operation_failed`).
+A known limitation remains: deadlines wrapped by remote Git operations can
+currently return exit code `7` (`auth_or_network`). User signals return exit
+code `130` (`interrupted`).

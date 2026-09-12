@@ -46,7 +46,7 @@ Please review these operational boundaries before integrating SPAS into your wor
 - **Submodules & LFS Pointers:** Git submodules and Git LFS pointer files are not supported.
 - **Special Git Files:** `.gitignore`, `.gitattributes`, and `.gitmodules` cannot be managed by SPAS.
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
-- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes and files with case-collision risks across Windows, macOS, and Linux are rejected on all platforms. On Windows, a preflight check rejects paths when either the workspace or the private clone absolute path reaches or exceeds 260 characters (Windows `MAX_PATH`); this check is machine-local, so long roots on another machine cannot be anticipated and may still be rejected by Git or the host filesystem.
+- **Non-Portable Filenames & Excessive Path Lengths:** Filename components exceeding 255 bytes and files with case-collision risks across Windows, macOS, and Linux are rejected on all platforms. On Windows, SPAS conservatively rejects paths when either the workspace or private-clone absolute path reaches 260 UTF-8 bytes. This byte-count preflight is stricter than the native `MAX_PATH` character limit for non-ASCII names. It is machine-local; another machine's roots are checked there, and Git or the filesystem can impose additional limits.
 
 ---
 
@@ -71,7 +71,8 @@ SPAS enforces safety limits to prevent runaway resource consumption:
 | :--- | :--- |
 | **Managed Tree Size** | Up to **10,000 recursive file entries** |
 | **Tree Metadata** | Up to **16 MiB** captured tree metadata |
-| **Git Command Output** | Up to **16 MiB stdout** and **1 MiB stderr** |
+| **Captured Git Command Output** | Up to **16 MiB stdout** and **1 MiB stderr** |
+| **Streaming Git Command Output** | Full output forwarded; last **64 KiB per stream** retained for diagnostics |
 
 SPAS does not place hard quotas on individual blob sizes or overall network transfers, though large assets are constrained by available disk space and network bandwidth.
 

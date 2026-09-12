@@ -20,6 +20,7 @@ import (
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/publicgit"
+	"github.com/getspas/spas/internal/spaserr"
 )
 
 type DiffOptions struct {
@@ -44,22 +45,9 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 	managedSet := stringSet(state.ManagedPaths)
 	pendingAdds := stringSet(state.PendingAdds)
 	pendingRemovals := stringSet(state.PendingRemovalPaths())
-	if len(options.Paths) > 0 {
-		filter := make(map[string]struct{})
-		for _, value := range options.Paths {
-			path, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
-			if err != nil {
-				return err
-			}
-			filter[path.String()] = struct{}{}
-		}
-		var selected []string
-		for _, value := range managed {
-			if _, found := filter[value]; found {
-				selected = append(selected, value)
-			}
-		}
-		managed = selected
+	managed, err = a.selectDiffPaths(ctx, repository, managed, options.Paths)
+	if err != nil {
+		return err
 	}
 	sort.Strings(managed)
 
@@ -166,30 +154,14 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 		return fmt.Errorf("private repository is not initialized; nothing is staged")
 	}
 	private := a.privateRepository(state)
-	var filters []pathmodel.Path
-	for _, value := range options.Paths {
-		path, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
-		if err != nil {
-			return err
-		}
-		filters = append(filters, path)
-	}
-	changes, err := private.ChangedPaths(ctx)
+	paths, err := private.StagedPaths(ctx)
 	if err != nil {
 		return err
 	}
-	filterSet := make(map[string]struct{}, len(filters))
-	for _, path := range filters {
-		filterSet[path.String()] = struct{}{}
-	}
-	changed := []string{}
-	for _, change := range changes {
-		if len(filterSet) > 0 {
-			if _, found := filterSet[change.Path.String()]; !found {
-				continue
-			}
-		}
-		changed = append(changed, change.Path.String())
+	changed := pathsToStrings(paths)
+	changed, err = a.selectDiffPaths(ctx, repository, changed, options.Paths)
+	if err != nil {
+		return err
 	}
 	sort.Strings(changed)
 	if a.JSON {
@@ -203,7 +175,91 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 		}
 		return nil
 	}
-	return private.StreamStagedDiff(ctx, options.Stat, filters, a.Out)
+	if len(options.Paths) > 0 {
+		if len(changed) == 0 {
+			return nil
+		}
+		return private.StreamStagedDiff(ctx, options.Stat, stringsToPaths(changed), a.Out)
+	}
+	return private.StreamStagedDiff(ctx, options.Stat, nil, a.Out)
+}
+
+func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repository, known, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return known, nil
+	}
+	// Git's configured policy (default false) is readable without the workspace
+	// write probe used by mutation collision checks. Existing aliases can also
+	// establish their identity directly when that policy is case-sensitive.
+	ignoreCase, _, err := repository.EffectiveIgnoreCase(ctx)
+	if err != nil {
+		return nil, err
+	}
+	exact := stringSet(known)
+	folded := make(map[string][]pathmodel.Path, len(exact))
+	for value := range exact {
+		path := pathmodel.Path(value)
+		key := pathmodel.Canonical(path, true)
+		folded[key] = append(folded[key], path)
+	}
+	selected := []string{}
+	seen := make(map[pathmodel.Path]bool)
+	for _, value := range values {
+		requested, observed, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
+		if err != nil {
+			return nil, err
+		}
+		stored := requested
+		if _, matches := exact[requested.String()]; !matches {
+			candidates := folded[pathmodel.Canonical(requested, true)]
+			if !ignoreCase && len(candidates) > 0 {
+				candidates, err = existingDiffAliases(repository.Root, observed, candidates)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(candidates) == 0 {
+				continue
+			}
+			if len(candidates) > 1 {
+				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("%q matches multiple changed paths; select an exact stored spelling", requested))
+			}
+			stored = candidates[0]
+		}
+		path, err := authoritativeManagedPath(repository.Root, observed, stored)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[path] {
+			selected = append(selected, path.String())
+			seen[path] = true
+		}
+	}
+	return selected, nil
+}
+
+func existingDiffAliases(root, observed string, candidates []pathmodel.Path) ([]pathmodel.Path, error) {
+	selected, err := os.Lstat(observed)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var matches []pathmodel.Path
+	for _, candidate := range candidates {
+		info, err := os.Lstat(candidate.OSPath(root))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if os.SameFile(selected, info) {
+			matches = append(matches, candidate)
+		}
+	}
+	return matches, nil
 }
 
 type DoctorResult struct {

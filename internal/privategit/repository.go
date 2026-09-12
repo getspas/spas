@@ -533,46 +533,14 @@ func (r Repository) TreePaths(ctx context.Context, revision string) ([]pathmodel
 	return paths, nil
 }
 
-func (r Repository) ChangedPaths(ctx context.Context) ([]ChangedPath, error) {
-	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("diff", "--cached", "--name-status", "-z")...)
+func (r Repository) StagedPaths(ctx context.Context) ([]pathmodel.Path, error) {
+	// Selection is per path: a rename exposes both the deleted source and the
+	// added destination, independently of Git's rename-detection heuristics.
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("diff", "--cached", "--no-renames", "--name-only", "-z")...)
 	if err != nil {
 		return nil, fmt.Errorf("list staged private changes: %w", err)
 	}
-	fields := bytes.Split(result.Stdout, []byte{0})
-	var changes []ChangedPath
-	for index := 0; index < len(fields); {
-		if len(fields[index]) == 0 {
-			index++
-			continue
-		}
-		status := string(fields[index])
-		index++
-		if index >= len(fields) {
-			return nil, fmt.Errorf("parse staged private changes: missing path")
-		}
-		path, err := pathmodel.Parse(string(fields[index]))
-		if err != nil {
-			return nil, err
-		}
-		index++
-		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
-			if index >= len(fields) {
-				return nil, fmt.Errorf("parse staged private rename: missing destination")
-			}
-			path, err = pathmodel.Parse(string(fields[index]))
-			if err != nil {
-				return nil, err
-			}
-			index++
-		}
-		changes = append(changes, ChangedPath{Status: status[:1], Path: path})
-	}
-	return changes, nil
-}
-
-type ChangedPath struct {
-	Status string         `json:"status"`
-	Path   pathmodel.Path `json:"path"`
+	return parsePaths(result.Stdout)
 }
 
 // StreamStagedDiff writes staged changes without retaining the complete diff

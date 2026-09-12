@@ -272,13 +272,13 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 		}
 		key := pathmodel.Canonical(file, ignoreCase)
 		if managed, found := managedSet[key]; found {
-			file, err = authoritativeManagedPath(repository.Root, file, managed)
+			file, err = authoritativeManagedPath(repository.Root, file.OSPath(repository.Root), managed)
 			if err != nil {
 				return err
 			}
 		}
 		if pending, found := addSet[key]; found {
-			file, err = authoritativeManagedPath(repository.Root, file, pending)
+			file, err = authoritativeManagedPath(repository.Root, file.OSPath(repository.Root), pending)
 			if err != nil {
 				return err
 			}
@@ -445,7 +445,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 	unenrolled := []string{}
 	refreshed := []string{}
 	for _, value := range options.Paths {
-		requested, _, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
+		requested, observed, err := pathmodel.Resolve(repository.Root, a.PathBase, value)
 		if err != nil {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("resolve managed path %q: %w", value, err))
 		}
@@ -460,12 +460,12 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 		}
 		path := requested
 		if isManaged {
-			path, err = authoritativeManagedPath(repository.Root, requested, managedPath)
+			path, err = authoritativeManagedPath(repository.Root, observed, managedPath)
 			if err != nil {
 				return err
 			}
 		} else {
-			path, err = authoritativeManagedPath(repository.Root, requested, pendingPath)
+			path, err = authoritativeManagedPath(repository.Root, observed, pendingPath)
 			if err != nil {
 				return err
 			}
@@ -560,10 +560,9 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 	return a.write(result)
 }
 
-// trackedPathDecision resolves what to do with an add target that public Git
-// already tracks: true means skip it, false with a nil error never occurs, and
-// an error aborts. Interactive runs are offered the choice; `--skip-tracked`
-// answers it ahead of time.
+// trackedPathDecision returns true to skip an already-public path. A false,
+// nil result leaves the tracking-conflict error to the caller. Prompt errors
+// abort the operation; --skip-tracked selects skipping without a prompt.
 func (a App) trackedPathDecision(ctx context.Context, path pathmodel.Path, skipTracked bool) (bool, error) {
 	if skipTracked {
 		return true, nil
@@ -1372,29 +1371,29 @@ func canonicalSet(paths []pathmodel.Path, ignoreCase bool) map[string]pathmodel.
 	return result
 }
 
-// authoritativeManagedPath resolves a case-equivalent user spelling to the
-// spelling already stored by SPAS. If both spellings exist as different files
-// on a case-sensitive filesystem while Git is configured case-insensitively,
-// treating them as the same path would operate on the wrong file.
-func authoritativeManagedPath(root string, requested, authoritative pathmodel.Path) (pathmodel.Path, error) {
-	if requested == authoritative {
+// authoritativeManagedPath checks the observed absolute filename before mapping
+// a case or normalization alias to the stored spelling. Callers must retain the
+// observed spelling from Resolve or use a path already verified by enrollment.
+func authoritativeManagedPath(root, observed string, authoritative pathmodel.Path) (pathmodel.Path, error) {
+	stored := authoritative.OSPath(root)
+	if observed == stored {
 		return authoritative, nil
 	}
-	requestedInfo, requestedErr := os.Lstat(requested.OSPath(root))
-	authoritativeInfo, authoritativeErr := os.Lstat(authoritative.OSPath(root))
+	requestedInfo, requestedErr := os.Lstat(observed)
+	authoritativeInfo, authoritativeErr := os.Lstat(stored)
 	if requestedErr == nil && authoritativeErr == nil {
 		if os.SameFile(requestedInfo, authoritativeInfo) {
 			return authoritative, nil
 		}
 		return "", spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
 			"%q and privately managed path %q are distinct files whose names collide under the current case policy",
-			requested, authoritative,
+			observed, authoritative,
 		))
 	}
 	if requestedErr == nil && errors.Is(authoritativeErr, os.ErrNotExist) {
 		return "", spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
-			"%q differs only by case from privately managed path %q; use the managed spelling",
-			requested, authoritative,
+			"selected path %q exists but privately managed path %q is missing; use the managed spelling",
+			observed, authoritative,
 		))
 	}
 	if requestedErr != nil && !errors.Is(requestedErr, os.ErrNotExist) {

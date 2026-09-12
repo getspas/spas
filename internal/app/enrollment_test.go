@@ -248,8 +248,21 @@ func TestAddUsesDirectoryEntrySpelling(t *testing.T) {
 			if test.name == "directory alias" {
 				selected = filepath.Join(selected, "résumé.txt")
 			}
-			if err := instance.Diff(t.Context(), DiffOptions{Paths: []string{selected}}); err != nil {
-				t.Fatalf("Diff(alias): %v", err)
+			var diffOutput bytes.Buffer
+			instance.Out = &diffOutput
+			for _, ignoreCase := range []string{"false", "unset", "true"} {
+				if ignoreCase == "unset" {
+					runGit(t, publicRoot, "config", "--unset", "core.ignorecase")
+				} else {
+					runGit(t, publicRoot, "config", "core.ignorecase", ignoreCase)
+				}
+				diffOutput.Reset()
+				if err := instance.Diff(t.Context(), DiffOptions{Paths: []string{selected}, NameOnly: true}); err != nil {
+					t.Fatalf("Diff(alias, ignorecase=%s): %v", ignoreCase, err)
+				}
+				if diffOutput.String() != test.stored+"\n" {
+					t.Fatalf("Diff(alias, ignorecase=%s) = %q, want enrolled path %q", ignoreCase, diffOutput.String(), test.stored)
+				}
 			}
 			if err := instance.Remove(t.Context(), RemoveOptions{Paths: []string{selected}}); err != nil {
 				t.Fatalf("Remove(alias): %v", err)

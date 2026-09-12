@@ -225,10 +225,11 @@ func TestStagedDiffDisambiguatesCaseOnlyRename(t *testing.T) {
 	runGit(t, root, "config", "core.ignorecase", "true")
 	runGit(t, privateRoot, "config", "core.ignorecase", "false")
 	oldPath, newPath := "docs/ARCHITECTURE.md", "docs/architecture.md"
-	if err := os.Rename(filepath.Join(privateRoot, filepath.FromSlash(oldPath)), filepath.Join(privateRoot, filepath.FromSlash(newPath))); err != nil {
-		t.Fatal(err)
+	runGit(t, privateRoot, "mv", "-f", "--", oldPath, newPath)
+	wantStaged := "D\x00docs/ARCHITECTURE.md\x00A\x00docs/architecture.md\x00"
+	if staged := gitOutput(t, privateRoot, "diff", "--cached", "--no-renames", "--name-status", "-z"); staged != wantStaged {
+		t.Fatalf("staged rename fixture = %q, want %q", staged, wantStaged)
 	}
-	runGit(t, privateRoot, "add", "-A")
 	instance.JSON = true
 	for _, selected := range []string{oldPath, newPath} {
 		var output bytes.Buffer

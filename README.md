@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="wiki/banner.png" alt="SPAS — Secure Private Asset Sync">
+
 # SPAS: Secure Private Asset Sync
 
 **Manage private assets in your project workspace without committing them to your main Git repository.**

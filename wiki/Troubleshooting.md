@@ -1,12 +1,12 @@
 # Troubleshooting Guide
 
-When encountering unexpected behavior, SPAS provides built-in offline diagnostic tools to help identify and resolve issues quickly.
+Use SPAS's offline diagnostics to check local state when a command behaves unexpectedly.
 
 ---
 
 ## 1. Quick Diagnostic Triage
 
-Always start by checking local state and running health checks:
+Start with the link status and health checks:
 
 ```bash
 # Check link status, managed assets, and recovery state
@@ -18,7 +18,7 @@ spas doctor
 
 ### Generating Sanitized JSON for Bug Reports
 
-For automated analysis or when filing an issue report, generate structured JSON output:
+Generate structured JSON for automated analysis or an issue report:
 
 ```bash
 spas doctor --json

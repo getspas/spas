@@ -6,7 +6,7 @@ This guide walks you through connecting a project workspace to a separate GitHub
 
 ## Prerequisites
 
-Before getting started, make sure you have:
+You need:
 
 - **SPAS installed** on your system `PATH` (see [Installation](Installation)).
 - **Git 2.43.1 or newer** installed and accessible in your shell.
@@ -63,7 +63,7 @@ spas add config/dev.json testdata/mock-api.json docs/team-notes.md
 
 - SPAS records these files in its local state.
 - SPAS creates an owned block inside your workspace's `.git/info/exclude`.
-- Your project repository's `.gitignore` remains completely untouched, keeping your public Git configuration clean.
+- Your project repository's `.gitignore` remains unchanged.
 
 > [!TIP]
 > Passing a directory (e.g., `spas add testdata`) enrolls all regular files currently inside that folder. To preview additions without saving, add `--dry-run`:
@@ -132,7 +132,7 @@ spas status
 git status
 ```
 
-Your managed assets remain right in your workspace where tests and build scripts can access them, but `git status` won't show them as untracked files!
+Your managed assets stay in the workspace where tests and build scripts can access them. `git status` won't list them as untracked files.
 
 ---
 
@@ -165,4 +165,4 @@ When setting up your project on another machine or collaborating with teammates:
 
 - Explore all flags and automation recipes in the [Command Reference](Command-reference).
 - Learn how SPAS handles safety invariants in [Safety & Limitations](Safety-and-limitations).
-- Run `spas doctor` anytime you want to perform a comprehensive health check on your environment.
+- Run `spas doctor` to check your environment and local SPAS state.

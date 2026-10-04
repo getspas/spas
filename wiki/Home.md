@@ -1,13 +1,13 @@
 # SPAS Documentation
 
-Welcome to the official SPAS documentation. SPAS keeps private and environment-specific assets in your local project workspace while synchronizing them with a dedicated, separate GitHub repository—leaving your main project Git history completely untracked and clean.
+SPAS keeps private and environment-specific assets in your local project workspace and synchronizes them with a separate GitHub repository. The managed assets remain untracked in your main project repository.
 
 ---
 
 ## Getting Started
 
 1. **[Installation](Installation)** — Download prebuilt binaries, verify checksums, or compile from source.
-2. **[Quick Start Guide](Quick-start)** — Connect your workspace, select private files, and run your first synchronization in minutes.
+2. **[Quick Start Guide](Quick-start)** — Connect your workspace, select private files, and run your first synchronization.
 3. **[Command Reference](Command-reference)** — Complete syntax, flags, automation recipes, and exit code reference for all CLI commands.
 4. **[JSON Output Schema](JSON-output-schema)** — Structured payload contracts and schema versioning for CI/CD automation.
 5. **[Troubleshooting Guide](Troubleshooting)** — Diagnose errors with `spas doctor`, resolve merge conflicts, and sanitize debug logs.
@@ -30,7 +30,7 @@ Welcome to the official SPAS documentation. SPAS keeps private and environment-s
 
 ## Core Concepts & Architecture
 
-To make the most of SPAS, it helps to understand how different components interact:
+SPAS separates project files from managed assets while keeping both in the workspace:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
@@ -64,7 +64,7 @@ To make the most of SPAS, it helps to understand how different components intera
 
 ## Supported Boundary
 
-SPAS is engineered with strict safety invariants:
+SPAS requires:
 
 - **Runtime Requirement:** Git 2.43.1 or newer.
 - **Worktree Model:** One project worktree per Git common directory.

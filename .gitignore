@@ -1,6 +1,7 @@
 /spas
 /spas.exe
 /dist/
+/.distribution/
 /coverage.out
 *.test
 *.prof

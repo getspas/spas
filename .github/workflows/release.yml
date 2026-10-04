@@ -15,8 +15,6 @@ concurrency:
 jobs:
   verify:
     name: Verify release source
-    permissions:
-      contents: read
     uses: ./.github/workflows/ci.yml
 
   codeql:
@@ -27,12 +25,10 @@ jobs:
     uses: ./.github/workflows/codeql.yml
 
   release:
-    name: Build draft release
-    needs:
-      - verify
-      - codeql
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    name: Build and attest draft release
+    needs: [verify, codeql]
+    runs-on: macos-15
+    timeout-minutes: 45
     permissions:
       contents: write
       id-token: write
@@ -41,10 +37,7 @@ jobs:
       - name: Validate semantic version tag
         shell: bash
         run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release tags must use semantic version form vMAJOR.MINOR.PATCH[-PRERELEASE]." >&2
-            exit 1
-          fi
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,15 +49,63 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
-      - name: Build draft release
+      - name: Prepare RPM signing key
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_SIGNING_FINGERPRINT }}
+          SPAS_PACKAGE_MAINTAINER: ${{ vars.SPAS_PACKAGE_MAINTAINER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RPM_SIGNING_KEY:?Set the armored RPM signing key}"
+          : "${RPM_SIGNING_FINGERPRINT:?Set the RPM signing fingerprint}"
+          : "${SPAS_PACKAGE_MAINTAINER:?Set the package maintainer name and email}"
+          brew install gnupg
+          umask 077
+          mkdir -p .distribution
+          printf '%s\n' "$RPM_SIGNING_KEY" > .distribution/rpm-signing.key
+          export GNUPGHOME="$RUNNER_TEMP/spas-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          gpg --batch --import .distribution/rpm-signing.key
+          gpg --batch --armor --export "$RPM_SIGNING_FINGERPRINT" > .distribution/spas-rpm-signing.asc
+          test -s .distribution/spas-rpm-signing.asc
+      - name: Build draft and package-manager recipes
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: v2.17.1
+          version: v2.18.1
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Attest build provenance
+          GITHUB_TOKEN: ${{ github.token }}
+          SPAS_PACKAGE_MAINTAINER: ${{ vars.SPAS_PACKAGE_MAINTAINER }}
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          NFPM_LINUX_PACKAGES_RPM_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+      - name: Verify macOS signatures and accepted notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in dist/spas_darwin_*/spas; do
+            codesign --verify --strict "$binary"
+            assessment=$(spctl --assess --type execute --verbose=2 "$binary" 2>&1)
+            grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
+          done
+          cp .distribution/spas-rpm-signing.asc dist/spas-rpm-signing.asc
+      - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
+      - name: Attest generated package-manager recipes
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/homebrew/Casks/spas.rb
+            dist/scoop/bucket/spas.json
+            dist/winget/manifests/g/GetSPAS/SPAS/*/GetSPAS.SPAS*.yaml
+      - name: Remove temporary private key
+        if: always()
+        run: rm -f .distribution/rpm-signing.key

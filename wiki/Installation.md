@@ -1,6 +1,6 @@
 # Installation
 
-SPAS is distributed as a single standalone executable for Linux, macOS, and Windows. It requires **Git 2.43.1 or newer**.
+SPAS runs as a single executable on Linux, macOS, and Windows. It requires **Git 2.43.1 or newer**.
 
 ---
 
@@ -34,7 +34,7 @@ git --version
 
 ## 2. Verify Release Authenticity and Integrity
 
-SPAS releases provide both GitHub build provenance attestations and a
+SPAS releases provide GitHub build provenance attestations and a
 `checksums.txt` SHA-256 manifest. Use both checks: the attestation verifies
 that the archive was produced by this repository's release workflow, while
 the checksum detects corruption and provides a portable digest for other
@@ -82,7 +82,7 @@ and checksum file are distributed through the same release channel.
 
 ## 3. Build from Source
 
-If you prefer building from source, ensure you have **Go 1.26.8 or newer** installed:
+Building from source requires **Go 1.26.8 or newer**:
 
 ```bash
 go install -trimpath github.com/getspas/spas@latest
@@ -95,6 +95,90 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 ---
+
+## 4. Package Managers
+
+Check the availability notes below before choosing a channel. Archive downloads,
+Scoop, and `go install` are available now. All packages require Git 2.43.1 or newer;
+Go is only needed when building from source. DEB and RPM packages install
+shell completions and documentation. Package removal preserves SPAS application data.
+
+### Homebrew: macOS and Linux
+
+The [Homebrew tap](https://github.com/getspas/homebrew-tap) is set up, but its
+first cask release is pending macOS signing and notarization setup.
+Once a signed release is published:
+
+```sh
+brew install --cask getspas/tap/spas
+brew upgrade --cask spas
+brew uninstall --cask spas
+```
+
+### WinGet: Windows
+
+After Microsoft accepts and publishes `GetSPAS.SPAS`:
+
+```powershell
+winget install --exact --id GetSPAS.SPAS --source winget --scope user
+winget upgrade --exact --id GetSPAS.SPAS --source winget --scope user
+winget uninstall --exact --id GetSPAS.SPAS --scope user
+```
+
+### Scoop: Windows
+
+The [getspas bucket](https://github.com/getspas/scoop-bucket) publishes SPAS
+`v0.1.2` for x64 and ARM64 Windows:
+
+```powershell
+scoop bucket add getspas https://github.com/getspas/scoop-bucket
+scoop install getspas/spas
+scoop update spas
+scoop uninstall spas
+```
+
+Scoop installs into your user environment by default. Installation does not
+modify your PowerShell profile or move SPAS configuration or private assets.
+
+### Downloadable Linux Packages
+
+DEB and RPM packages will be attached to the next new release tag on
+[GitHub Releases](https://github.com/getspas/spas/releases).
+The existing `v0.1.2` release contains archives only; its assets will not be replaced.
+SPAS does not host an APT or DNF repository.
+
+Download the package for your architecture and verify its provenance and
+SHA-256 digest as described above. For Debian or Ubuntu:
+
+```sh
+sudo apt install ./spas_<VERSION>_amd64.deb
+```
+
+For Fedora or another compatible RPM system, verify the release's public signing
+key before importing it. Download `spas-rpm-signing.asc` from the same release,
+check its attestation and checksum, and display its fingerprint:
+
+```sh
+curl -fLO "https://github.com/getspas/spas/releases/download/v<VERSION>/spas-rpm-signing.asc"
+gh attestation verify spas-rpm-signing.asc --repo getspas/spas
+sha256sum spas-rpm-signing.asc
+grep spas-rpm-signing.asc checksums.txt
+gpg --show-keys --with-fingerprint spas-rpm-signing.asc
+```
+
+Compare the complete primary-key fingerprint with the fingerprint in a trusted
+SPAS release announcement. Import the key only after it matches, then require
+signature verification when installing the local RPM:
+
+```sh
+sudo rpm --import spas-rpm-signing.asc
+sudo dnf --setopt=localpkg_gpgcheck=1 install ./spas-<VERSION>-1.x86_64.rpm
+```
+
+ARM64 filenames end in `_arm64.deb` and `.aarch64.rpm`. To upgrade, download
+and verify the newer package and run the same installation command with its
+filename. An older distribution's Git package may not meet SPAS's minimum;
+update Git through a supported source instead of bypassing the dependency.
 
 ## 5. Shell Auto-Completion
 
@@ -132,4 +216,4 @@ Add-Content $PROFILE "`nspas completion powershell | Out-String | Invoke-Express
 
 ## Next Steps
 
-Now that SPAS is installed, head over to the [Quick Start Guide](Quick-start) to set up your first linked repository.
+Follow the [Quick Start Guide](Quick-start) to set up your first linked repository.

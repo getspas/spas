@@ -2,6 +2,11 @@ version: 2
 
 project_name: spas
 
+# GoReleaser builds the artifacts and recipes; publish recipes after draft approval.
+before:
+  hooks:
+    - bash scripts/distribution/generate-completions.sh
+
 builds:
   - id: spas
     main: .
@@ -38,10 +43,94 @@ archives:
     files:
       - README.md
       - LICENSE
+      - wiki/*.md
+      - wiki/banner.png
+      - src: .distribution/completions/*
+        dst: completions
+        strip_parent: true
+
+source:
+  enabled: true
+  format: tar.gz
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+  prefix_template: "{{ .ProjectName }}_{{ .Version }}/"
+
+winget:
+  - name: spas
+    ids: [release-archives]
+    package_identifier: GetSPAS.SPAS
+    package_name: SPAS
+    publisher: GetSPAS
+    publisher_url: https://github.com/getspas
+    publisher_support_url: https://github.com/getspas/spas/issues
+    homepage: https://github.com/getspas/spas
+    short_description: Secure private asset sync for Git workspaces
+    license: AGPL-3.0-only
+    license_url: https://github.com/getspas/spas/blob/{{ .Tag }}/LICENSE
+    path: manifests/g/GetSPAS/SPAS/{{ .Version }}
+    skip_upload: true
+    repository:
+      owner: getspas
+      name: winget-pkgs
+    dependencies:
+      - package_identifier: Git.Git
+        minimum_version: 2.43.1
+    tags: [cli, git, sync]
+
+scoops:
+  - name: spas
+    ids: [release-archives]
+    homepage: https://github.com/getspas/spas
+    description: Secure private asset sync for Git workspaces
+    license: AGPL-3.0-only
+    directory: bucket
+    skip_upload: true
+    repository:
+      owner: getspas
+      name: scoop-bucket
+    depends: [git]
+
+nfpms:
+  - id: linux_packages
+    ids: [spas]
+    package_name: spas
+    formats: [deb, rpm]
+    file_name_template: '{{ .ConventionalFileName }}'
+    bindir: /usr/bin
+    homepage: https://github.com/getspas/spas
+    maintainer: '{{ .Env.SPAS_PACKAGE_MAINTAINER }}'
+    description: Secure private asset sync for Git workspaces
+    license: AGPL-3.0-only
+    section: utils
+    priority: optional
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/spas/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/spas/README.md
+      - src: wiki
+        dst: /usr/share/doc/spas/wiki
+        type: tree
+      - src: .distribution/completions/spas.bash
+        dst: /usr/share/bash-completion/completions/spas
+      - src: .distribution/completions/_spas
+        dst: /usr/share/zsh/site-functions/_spas
+      - src: .distribution/completions/spas.fish
+        dst: /usr/share/fish/vendor_completions.d/spas.fish
+    overrides:
+      deb:
+        dependencies: ['git (>= 1:2.43.1)', ca-certificates, openssh-client]
+      rpm:
+        dependencies: ['git >= 2.43.1', ca-certificates, openssh-clients]
+        rpm:
+          signature:
+            key_file: '{{ if not .IsSnapshot }}.distribution/rpm-signing.key{{ end }}'
 
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: .distribution/spas-rpm-signing*.asc
 
 changelog:
   sort: asc
@@ -55,3 +144,7 @@ release:
   draft: true
   prerelease: auto
   name_template: "SPAS {{ .Tag }}"
+  extra_files:
+    - glob: .distribution/spas-rpm-signing.asc
+    - glob: dist/scoop/bucket/spas.json
+    - glob: dist/winget/manifests/g/GetSPAS/SPAS/{{ .Version }}/GetSPAS.SPAS*.yaml

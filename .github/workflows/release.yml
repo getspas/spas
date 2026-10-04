@@ -15,8 +15,6 @@ concurrency:
 jobs:
   verify:
     name: Verify release source
-    permissions:
-      contents: read
     uses: ./.github/workflows/ci.yml
 
   codeql:
@@ -27,24 +25,15 @@ jobs:
     uses: ./.github/workflows/codeql.yml
 
   release:
-    name: Build draft release
-    needs:
-      - verify
-      - codeql
+    name: Build and attest draft release
+    needs: [verify, codeql]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
-      - name: Validate semantic version tag
-        shell: bash
-        run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release tags must use semantic version form vMAJOR.MINOR.PATCH[-PRERELEASE]." >&2
-            exit 1
-          fi
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,15 +45,46 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
-      - name: Build draft release
+      - name: Update package metadata
+        run: sudo apt-get update
+      - name: Install GnuPG
+        run: sudo apt-get install --no-install-recommends -y gnupg
+      - name: Prepare RPM signing key
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_SIGNING_FINGERPRINT }}
+          SPAS_PACKAGE_MAINTAINER: ${{ vars.SPAS_PACKAGE_MAINTAINER }}
+        run: bash scripts/distribution/prepare-rpm-signing.sh
+      - name: Build draft and package-manager recipes
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: v2.17.1
+          version: v2.18.1
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Attest build provenance
+          GITHUB_TOKEN: ${{ github.token }}
+          SPAS_PACKAGE_MAINTAINER: ${{ vars.SPAS_PACKAGE_MAINTAINER }}
+          NFPM_LINUX_PACKAGES_RPM_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+      - name: Generate Homebrew formula
+        run: python3 scripts/distribution/generate-homebrew-formula.py
+      - name: Attach Homebrew formula to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/homebrew/Formula/spas.rb --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Include public signing key for attestation
+        run: cp .distribution/spas-rpm-signing.asc dist/spas-rpm-signing.asc
+      - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
+      - name: Attest generated package-manager recipes
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/homebrew/Formula/spas.rb
+            dist/scoop/bucket/spas.json
+            dist/winget/manifests/g/GetSPAS/SPAS/*/GetSPAS.SPAS*.yaml
+      - name: Remove temporary private key
+        if: always()
+        run: rm -f .distribution/rpm-signing.key

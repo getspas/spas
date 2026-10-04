@@ -6,7 +6,7 @@
 
 **Manage private assets in your project workspace without committing them to your main Git repository.**
 
-SPAS (pronounced **"/spæz/"**) seamlessly connects your local workspace to a separate GitHub repository, keeping private files, environment configs, and test fixtures right where your tools expect them.
+SPAS (pronounced **"/spæz/"**) connects your local workspace to a separate GitHub repository, keeping private files, environment configs, and test fixtures where your tools expect them.
 
 [![CI](https://github.com/getspas/spas/actions/workflows/ci.yml/badge.svg)](https://github.com/getspas/spas/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/getspas/spas?display_name=tag&sort=semver)](https://github.com/getspas/spas/releases/latest)
@@ -24,7 +24,7 @@ Every project relies on files that don't belong in the public or shared Git repo
 
 Moving these files elsewhere breaks build paths. Copying them manually across machines is slow and error-prone. Committing them exposes them to every collaborator and bloats history.
 
-**SPAS solves this by bridging the gap:**
+SPAS keeps those files in your workspace and versions them separately:
 
 - **Zero Path Rewiring:** Your files remain in their expected workspace locations. Build scripts, tests, and IDEs work without modification.
 - **Clean Main History:** Files are automatically ignored in the main project via `.git/info/exclude`, leaving your `.gitignore` untouched.
@@ -85,6 +85,23 @@ SPAS requires **Git 2.43.1 or newer** at runtime.
 
 For complete verification and shell completion setup, see the [Installation Guide](https://github.com/getspas/spas/wiki/Installation).
 
+### Package Managers
+
+Use Homebrew on macOS or Linux, WinGet or Scoop on Windows, or download a
+DEB or RPM package for Linux. The Homebrew formula builds SPAS from source.
+
+| Platform | Channel | Installation |
+| --- | --- | --- |
+| macOS / Linux | Homebrew source formula | `brew install getspas/tap/spas` |
+| Windows | WinGet | `winget install --exact --id GetSPAS.SPAS --source winget --scope user` |
+| Windows | Scoop | Add the [getspas bucket](https://github.com/getspas/scoop-bucket), then `scoop install getspas/spas` |
+| Debian / Ubuntu | DEB download | Download the release DEB and run `sudo apt install ./spas_<VERSION>_amd64.deb` |
+| Fedora / compatible RPM systems | RPM download | Verify the release RPM and install it with DNF |
+
+See the [package-manager installation instructions](wiki/Installation.md#4-package-managers).
+Download Linux packages from [GitHub Releases](https://github.com/getspas/spas/releases)
+and install them locally with APT or DNF.
+
 ### Build from Source
 
 ```bash
@@ -122,7 +139,7 @@ spas sync
 
 ### Preview Before Syncing
 
-Want to inspect what will happen before modifying files or committing?
+Preview the sync and inspect differences before modifying files or committing:
 
 ```bash
 spas sync --dry-run
@@ -148,7 +165,7 @@ spas diff --stat
 
 ### Non-Interactive & CI Automation
 
-SPAS is fully scriptable. Pass `--json` and explicit policies to run in automated pipelines without interactive prompts:
+Pass `--json` and explicit policies to run SPAS in automated pipelines without interactive prompts:
 
 ```bash
 spas sync --json \

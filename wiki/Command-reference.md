@@ -1,6 +1,6 @@
 # Command Reference
 
-SPAS commands are interactive by default. For scripting, continuous integration (CI), and automation, supply decisions explicitly via CLI flags or use `--json` to receive structured outputs and disable prompts.
+SPAS commands are interactive by default. For scripts and continuous integration (CI), supply decisions through CLI flags. Use `--json` for structured output with prompts disabled.
 
 ---
 
@@ -250,7 +250,7 @@ spas diff [PATH...] [flags]
 
 ## `spas doctor`
 
-Perform comprehensive offline diagnostics on Git configuration, path collisions, exclusion block integrity, merge protection, and crash recovery state.
+Check Git configuration, path collisions, exclusion block integrity, merge protection, and crash recovery state offline.
 
 ```text
 spas doctor [flags]

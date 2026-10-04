@@ -1,6 +1,6 @@
 # JSON Output Schema Reference
 
-SPAS provides structured, machine-readable JSON output for all commands when invoked with the `--json` flag. This facilitates integration into continuous integration (CI) environments, automation pipelines, and custom developer tooling.
+SPAS provides structured JSON output for all commands invoked with `--json`. You can use this output in continuous integration (CI), automation pipelines, and custom developer tools.
 
 ---
 

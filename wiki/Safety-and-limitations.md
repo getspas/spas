@@ -1,8 +1,6 @@
 # Safety & Limitations
 
-SPAS is engineered around a fail-safe security model: when encountering an unsupported path, ambiguous Git state, or potential data race, it stops immediately and reports the exact condition rather than guessing.
-
-Please review these operational boundaries before integrating SPAS into your workflows.
+SPAS stops immediately and reports the condition when it encounters an unsupported path, ambiguous Git state, or potential data race. Review these operational boundaries before using it in your workflows.
 
 ---
 

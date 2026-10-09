@@ -47,7 +47,7 @@ Contributors need the following tools installed locally:
 
 | Dependency | Minimum Version | Purpose |
 | :--- | :--- | :--- |
-| **Go** | `1.26.5` or newer | Language compiler and runtime toolchain |
+| **Go** | `1.26.8` or newer | Language compiler and runtime toolchain |
 | **Git** | `2.43.1` or newer | Git CLI used by tests and runtime operations |
 | **govulncheck** | `v1.6.0` or newer | Static analysis for known Go security vulnerabilities |
 | **markdownlint-cli2** | `0.23.0` or newer | Documentation formatting and linting (`npx -y markdownlint-cli2`) |

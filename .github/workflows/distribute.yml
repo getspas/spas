@@ -1,0 +1,57 @@
+name: Distribute published release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    name: Publish ${{ matrix.channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: distribution
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: homebrew
+            repository: homebrew-tap
+            directory: Formula
+            pattern: spas.rb
+          - channel: scoop
+            repository: scoop-bucket
+            directory: bucket
+            pattern: spas.json
+          - channel: winget
+            repository: winget-pkgs
+            directory: manifests/g/GetSPAS/SPAS
+            pattern: GetSPAS.SPAS*.yaml
+    concurrency:
+      group: distribution-${{ matrix.channel }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out distribution tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Publish approved GoReleaser recipes
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          CHANNEL: ${{ matrix.channel }}
+          REPOSITORY: ${{ matrix.repository }}
+          DIRECTORY: ${{ matrix.directory }}
+          PATTERN: ${{ matrix.pattern }}
+        shell: bash
+        run: bash scripts/distribution/publish-recipes.sh

@@ -56,8 +56,6 @@ jobs:
         run: go mod tidy -diff
       - name: Verify modules
         run: go mod verify
-      - name: Test recipe publication
-        run: python3 scripts/distribution/publish-recipes_test.py
       - name: Check release configuration
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

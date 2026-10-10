@@ -80,6 +80,8 @@ jobs:
             dist/homebrew/Formula/spas.rb
             dist/scoop/bucket/spas.json
             dist/winget/manifests/g/GetSPAS/SPAS/*/GetSPAS.SPAS*.yaml
+      # Keep package-manager recipes in workflow artifacts, outside the release downloads.
+      # The dist root and artifact name must match publish-recipes.sh's download paths.
       - name: Store package-manager recipes
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

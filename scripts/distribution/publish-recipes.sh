@@ -11,6 +11,7 @@ if [[ "$TAG" != "$latest" ]]; then
   echo "Skipping $TAG: $latest is the current release."
   exit 0
 fi
+# Select the tagged build, not the newest workflow run, which may belong to another release.
 release_commit=$(GH_TOKEN="$RELEASE_READ_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
 release_run=$(GH_TOKEN="$RELEASE_READ_TOKEN" gh run list --repo "$GITHUB_REPOSITORY" \
   --workflow release.yml --event push --branch "$TAG" --commit "$release_commit" \
@@ -21,6 +22,7 @@ if [[ -z "$release_run" ]]; then
 fi
 GH_TOKEN="$RELEASE_READ_TOKEN" gh run download "$release_run" --repo "$GITHUB_REPOSITORY" \
   --name package-manager-recipes --dir recipes
+# upload-artifact preserves paths relative to dist; WinGet includes the version directory.
 recipe_directory="recipes/$CHANNEL/$DIRECTORY"
 if [[ "$CHANNEL" == winget ]]; then
   recipe_directory+="/${TAG#v}"
@@ -32,6 +34,7 @@ for recipe in "$recipe_directory/"*; do
 done
 gh auth setup-git
 if [[ "$CHANNEL" == winget ]]; then
+  # Clone after synchronization so the submission branch starts from current upstream master.
   gh repo sync "getspas/$REPOSITORY" --source microsoft/winget-pkgs --branch master
 fi
 git clone --depth=1 --filter=blob:none --sparse \
@@ -68,6 +71,7 @@ else
   git -C channel push origin "HEAD:$branch"
 fi
 if [[ "$CHANNEL" == winget ]]; then
+  # REST accepts owner:branch; gh pr list's --head filter accepts only the branch name.
   existing=$(gh api --method GET repos/microsoft/winget-pkgs/pulls \
     -f state=all -f "head=getspas:$branch" --jq '.[0].html_url // empty')
   if [[ -n "$existing" ]]; then

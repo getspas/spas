@@ -145,4 +145,5 @@ release:
   prerelease: auto
   name_template: "SPAS {{ .Tag }}"
   extra_files:
+    # Users import this public key to verify the signed RPM packages.
     - glob: .distribution/spas-rpm-signing.asc

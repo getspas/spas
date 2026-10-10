@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Publish the approved recipes attached to the latest stable SPAS release.
+# Publish the attested recipes generated for the latest stable SPAS release.
 set -euo pipefail
 : "${GH_TOKEN:?Set DISTRIBUTION_TOKEN for the channel repositories}"
+: "${RELEASE_READ_TOKEN:?Set the repository token for release workflow artifacts}"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
   --jq '(.isDraft == false) and (.isPrerelease == false)' | grep -qx true
@@ -10,12 +11,29 @@ if [[ "$TAG" != "$latest" ]]; then
   echo "Skipping $TAG: $latest is the current release."
   exit 0
 fi
-gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PATTERN" --dir recipes
-for recipe in recipes/*; do
+release_commit=$(GH_TOKEN="$RELEASE_READ_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+release_run=$(GH_TOKEN="$RELEASE_READ_TOKEN" gh run list --repo "$GITHUB_REPOSITORY" \
+  --workflow release.yml --event push --branch "$TAG" --commit "$release_commit" \
+  --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+if [[ -z "$release_run" ]]; then
+  echo "No successful release workflow found for $TAG." >&2
+  exit 1
+fi
+GH_TOKEN="$RELEASE_READ_TOKEN" gh run download "$release_run" --repo "$GITHUB_REPOSITORY" \
+  --name package-manager-recipes --dir recipes
+recipe_directory="recipes/$CHANNEL/$DIRECTORY"
+if [[ "$CHANNEL" == winget ]]; then
+  recipe_directory+="/${TAG#v}"
+fi
+for recipe in "$recipe_directory/"*; do
   gh attestation verify "$recipe" --repo "$GITHUB_REPOSITORY" \
-    --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "refs/tags/$TAG"
+    --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+    --source-ref "refs/tags/$TAG" --source-digest "$release_commit"
 done
 gh auth setup-git
+if [[ "$CHANNEL" == winget ]]; then
+  gh repo sync "getspas/$REPOSITORY" --source microsoft/winget-pkgs --branch master
+fi
 git clone --depth=1 --filter=blob:none --sparse \
   --config core.autocrlf=false --config core.eol=lf \
   "https://github.com/getspas/$REPOSITORY.git" channel
@@ -24,8 +42,7 @@ git -C channel config user.email '41898282+github-actions[bot]@users.noreply.git
 git -C channel sparse-checkout set "$DIRECTORY"
 if [[ "$CHANNEL" == winget ]]; then
   branch="codex/spas-$TAG"
-  git -C channel fetch --depth=1 --filter=blob:none https://github.com/microsoft/winget-pkgs.git master
-  git -C channel switch -c "$branch" FETCH_HEAD
+  git -C channel switch -c "$branch"
   target="$DIRECTORY/${TAG#v}"
   if git -C channel ls-tree --name-only HEAD "$target" | grep -q .; then
     echo "WinGet already contains $TAG."
@@ -37,7 +54,7 @@ else
   git -C channel rm --ignore-unmatch .spas-release.json
 fi
 mkdir -p "channel/$target"
-cp recipes/* "channel/$target/"
+cp "$recipe_directory/"* "channel/$target/"
 git -C channel add -- "$target"
 if git -C channel diff --cached --quiet; then
   echo "$CHANNEL already contains this release."
@@ -51,7 +68,8 @@ else
   git -C channel push origin "HEAD:$branch"
 fi
 if [[ "$CHANNEL" == winget ]]; then
-  existing=$(gh pr list --repo microsoft/winget-pkgs --head "getspas:$branch" --state all --json url --jq '.[0].url // empty')
+  existing=$(gh api --method GET repos/microsoft/winget-pkgs/pulls \
+    -f state=all -f "head=getspas:$branch" --jq '.[0].html_url // empty')
   if [[ -n "$existing" ]]; then
     echo "$existing"
     exit 0

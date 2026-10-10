@@ -146,5 +146,3 @@ release:
   name_template: "SPAS {{ .Tag }}"
   extra_files:
     - glob: .distribution/spas-rpm-signing.asc
-    - glob: dist/scoop/bucket/spas.json
-    - glob: dist/winget/manifests/g/GetSPAS/SPAS/{{ .Version }}/GetSPAS.SPAS*.yaml

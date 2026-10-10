@@ -11,6 +11,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -27,15 +28,12 @@ jobs:
           - channel: homebrew
             repository: homebrew-tap
             directory: Formula
-            pattern: spas.rb
           - channel: scoop
             repository: scoop-bucket
             directory: bucket
-            pattern: spas.json
           - channel: winget
             repository: winget-pkgs
             directory: manifests/g/GetSPAS/SPAS
-            pattern: GetSPAS.SPAS*.yaml
     concurrency:
       group: distribution-${{ matrix.channel }}
       cancel-in-progress: false
@@ -48,10 +46,10 @@ jobs:
       - name: Publish approved GoReleaser recipes
         env:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+          RELEASE_READ_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           CHANNEL: ${{ matrix.channel }}
           REPOSITORY: ${{ matrix.repository }}
           DIRECTORY: ${{ matrix.directory }}
-          PATTERN: ${{ matrix.pattern }}
         shell: bash
         run: bash scripts/distribution/publish-recipes.sh

@@ -79,7 +79,7 @@ SPAS coordinates three distinct layers:
 
 ## Installation
 
-Download the pre-compiled binary for your system from the [latest GitHub release](https://github.com/getspas/spas/releases/latest), extract it, and place `spas` (or `spas.exe`) in your system `PATH`.
+Download the pre-compiled binary for your system from the [latest GitHub release](https://github.com/getspas/spas/releases/latest), rename it to `spas` (or `spas.exe` on Windows), and place it in your system `PATH`. On macOS and Linux, make it executable with `chmod +x spas`.
 
 SPAS requires **Git 2.43.1 or newer** at runtime.
 

@@ -30,34 +30,16 @@ builds:
       - -X github.com/getspas/spas/internal/version.Date={{ .CommitDate }}
 
 archives:
-  - id: release-archives
+  - id: release-binaries
     ids:
       - spas
     formats:
-      - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
+      - binary
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - README.md
-      - LICENSE
-      - wiki/*.md
-      - wiki/banner.png
-      - src: .distribution/completions/*
-        dst: completions
-        strip_parent: true
-
-source:
-  enabled: true
-  format: tar.gz
-  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
-  prefix_template: "{{ .ProjectName }}_{{ .Version }}/"
 
 winget:
   - name: spas
-    ids: [release-archives]
+    ids: [release-binaries]
     package_identifier: GetSPAS.SPAS
     package_name: SPAS
     publisher: GetSPAS
@@ -76,19 +58,6 @@ winget:
       - package_identifier: Git.Git
         minimum_version: 2.43.1
     tags: [cli, git, sync]
-
-scoops:
-  - name: spas
-    ids: [release-archives]
-    homepage: https://github.com/getspas/spas
-    description: Secure private asset sync for Git workspaces
-    license: AGPL-3.0-only
-    directory: bucket
-    skip_upload: true
-    repository:
-      owner: getspas
-      name: scoop-bucket
-    depends: [git]
 
 nfpms:
   - id: linux_packages

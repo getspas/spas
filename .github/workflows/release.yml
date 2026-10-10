@@ -67,6 +67,8 @@ jobs:
           NFPM_LINUX_PACKAGES_RPM_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
       - name: Generate Homebrew formula
         run: python3 scripts/distribution/generate-homebrew-formula.py
+      - name: Generate Scoop manifest
+        run: python3 scripts/distribution/generate-scoop-manifest.py
       - name: Include public signing key for attestation
         run: cp .distribution/spas-rpm-signing.asc dist/spas-rpm-signing.asc
       - name: Attest release artifacts

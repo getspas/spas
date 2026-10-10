@@ -6,22 +6,22 @@ SPAS runs as a single executable on Linux, macOS, and Windows. It requires **Git
 
 ## 1. Download Prebuilt Binaries
 
-Visit the [GitHub Releases](https://github.com/getspas/spas/releases/latest) page and download the appropriate archive for your operating system and architecture:
+Visit the [GitHub Releases](https://github.com/getspas/spas/releases/latest) page and download the appropriate binary for your operating system and architecture:
 
-| Platform | Architecture | Archive File |
+| Platform | Architecture | Binary File |
 | :--- | :--- | :--- |
-| **Linux** | x86_64 (`amd64`) | `spas_<VERSION>_linux_amd64.tar.gz` |
-| **Linux** | ARM64 (`arm64`) | `spas_<VERSION>_linux_arm64.tar.gz` |
-| **macOS** | Apple Silicon (`arm64`) | `spas_<VERSION>_darwin_arm64.tar.gz` |
-| **macOS** | Intel (`amd64`) | `spas_<VERSION>_darwin_amd64.tar.gz` |
-| **Windows** | x86_64 (`amd64`) | `spas_<VERSION>_windows_amd64.zip` |
-| **Windows** | ARM64 (`arm64`) | `spas_<VERSION>_windows_arm64.zip` |
+| **Linux** | x86_64 (`amd64`) | `spas_<VERSION>_linux_amd64` |
+| **Linux** | ARM64 (`arm64`) | `spas_<VERSION>_linux_arm64` |
+| **macOS** | Apple Silicon (`arm64`) | `spas_<VERSION>_darwin_arm64` |
+| **macOS** | Intel (`amd64`) | `spas_<VERSION>_darwin_amd64` |
+| **Windows** | x86_64 (`amd64`) | `spas_<VERSION>_windows_amd64.exe` |
+| **Windows** | ARM64 (`arm64`) | `spas_<VERSION>_windows_arm64.exe` |
 
 *(Replace `<VERSION>` with the release tag, e.g., `1.0.0`)*
 
-### Extract & Add to PATH
+### Rename & Add to PATH
 
-Extract the downloaded archive and move the binary to a directory included in your system's `PATH` (such as `/usr/local/bin` on Unix systems or `C:\Program Files\spas` on Windows).
+Rename the downloaded file to `spas` (or `spas.exe` on Windows) and move it to a directory included in your system's `PATH` (such as `/usr/local/bin` on Unix systems or `C:\Program Files\spas` on Windows). On macOS and Linux, run `chmod +x spas` to make it executable.
 
 Verify the installation:
 
@@ -36,50 +36,49 @@ git --version
 
 SPAS releases provide GitHub build provenance attestations and a
 `checksums.txt` SHA-256 manifest. Use both checks: the attestation verifies
-that the archive was produced by this repository's release workflow, while
+that the binary was produced by this repository's release workflow, while
 the checksum detects corruption and provides a portable digest for other
 tooling.
 
 First, install the [GitHub CLI](https://cli.github.com/) and verify the
-downloaded archive's provenance:
+downloaded binary's provenance:
 
 ```bash
-gh attestation verify spas_<VERSION>_<OS>_<ARCH>.<EXT> --repo getspas/spas
+gh attestation verify <DOWNLOADED_BINARY> --repo getspas/spas
 ```
 
-Replace the placeholder with the archive you downloaded, for example
-`spas_1.0.0_linux_amd64.tar.gz`. Verification must succeed before you extract
-or run the binary.
+Replace the placeholder with the binary you downloaded, for example
+`spas_1.0.0_linux_amd64`. Verification must succeed before you run the binary.
 
-macOS archives have GitHub build attestations but are not Apple Developer ID
+macOS binaries have GitHub build attestations but are not Apple Developer ID
 signed or notarized. Downloaded binaries may prompt a macOS security warning;
 use the source-built Homebrew formula or `go install` if you prefer a local build.
 
-Every release includes an official `checksums.txt` file containing SHA-256 digests. Download `checksums.txt` into the same folder as the release archive and verify the integrity:
+Every release includes an official `checksums.txt` file containing SHA-256 digests. Download `checksums.txt` into the same folder as the release binary and verify the integrity:
 
 ### Linux
 
 ```bash
-sha256sum spas_*_linux_amd64.tar.gz
-grep spas_.*_linux_amd64.tar.gz checksums.txt
+sha256sum spas_*_linux_amd64
+grep spas_.*_linux_amd64 checksums.txt
 ```
 
 ### macOS
 
 ```bash
-shasum -a 256 spas_*_darwin_arm64.tar.gz
-grep spas_.*_darwin_arm64.tar.gz checksums.txt
+shasum -a 256 spas_*_darwin_arm64
+grep spas_.*_darwin_arm64 checksums.txt
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-Get-FileHash .\spas_*_windows_amd64.zip -Algorithm SHA256
+Get-FileHash .\spas_*_windows_amd64.exe -Algorithm SHA256
 Select-String -Path .\checksums.txt -Pattern "windows_amd64"
 ```
 
 The output hash must match the value listed in `checksums.txt`. A checksum
-match is not a substitute for the provenance check above because the archive
+match is not a substitute for the provenance check above because the binary
 and checksum file are distributed through the same release channel.
 
 ---

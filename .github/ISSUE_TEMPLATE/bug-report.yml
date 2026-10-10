@@ -50,7 +50,7 @@ body:
     attributes:
       label: Installation method
       options:
-        - GitHub release archive
+        - GitHub release binary
         - go install
         - Local source build
         - Other

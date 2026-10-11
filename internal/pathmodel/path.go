@@ -25,20 +25,20 @@ func Parse(value string) (Path, error) {
 		return "", fmt.Errorf("path is empty")
 	}
 	if strings.ContainsAny(value, "\x00\r\n") {
-		return "", fmt.Errorf("path contains an unsupported control character")
+		return "", fmt.Errorf("path contains a control character that SPAS cannot represent in exclusion rules")
 	}
 	if !utf8.ValidString(value) {
-		return "", fmt.Errorf("path must be valid UTF-8")
+		return "", fmt.Errorf("SPAS state and exclusion rules require valid UTF-8 paths")
 	}
 	// Managed paths are stored, excluded, and staged in Unicode NFC, matching
 	// the precomposed form Git itself uses on macOS. Exclude patterns are not
 	// normalized by Git, so a decomposed spelling would never match.
 	value = norm.NFC.String(value)
-	if strings.Contains(value, `\`) {
+	if runtime.GOOS == "windows" && strings.Contains(value, `\`) {
 		return "", fmt.Errorf("path must use Git slash separators")
 	}
 
-	if strings.HasPrefix(value, "/") || filepath.IsAbs(value) {
+	if strings.HasPrefix(value, "/") || filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
 		return "", fmt.Errorf("path must be relative to the public workspace")
 	}
 
@@ -62,9 +62,9 @@ func Parse(value string) (Path, error) {
 
 // ParseObserved validates a path observed in the PUBLIC repository's index.
 // It rejects only what is unsafe to compare or to pass to Git — it must never
-// reject a merely non-portable name, because a public repository is allowed to
-// track files SPAS itself would not manage (colons, Windows-reserved names,
-// unusual Unicode). The original spelling is preserved exactly so pathspecs
+// reject a name unsupported by SPAS or the current host, because a public
+// repository may track such files (device names, unusual Unicode). The original
+// spelling is preserved exactly so pathspecs
 // still match the index.
 func ParseObserved(value string) (Path, error) {
 	if value == "" {
@@ -159,21 +159,23 @@ func validateComponent(value string) error {
 	if len(value) > limits.MaxPathComponentBytes {
 		return fmt.Errorf("component exceeds the cross-platform %d-byte filename limit", limits.MaxPathComponentBytes)
 	}
-	if strings.HasSuffix(value, " ") || strings.HasSuffix(value, ".") {
-		return fmt.Errorf("component has a trailing space or period")
-	}
-	if strings.Contains(value, ":") {
-		return fmt.Errorf("component contains a colon")
-	}
-	if strings.ContainsAny(value, "<>\"|?*") {
-		return fmt.Errorf("component contains a Windows-reserved character")
-	}
-	if windowsReserved.MatchString(value) {
-		return fmt.Errorf("component uses a Windows reserved name")
+	// Win32 aliases trailing dots/spaces and device names, and a colon can
+	// address an alternate data stream. Reject those forms on Windows before
+	// SPAS writes a different file than the literal Git path.
+	if runtime.GOOS == "windows" {
+		if strings.HasSuffix(value, " ") || strings.HasSuffix(value, ".") {
+			return fmt.Errorf("component has a trailing space or period unsupported by Windows")
+		}
+		if strings.ContainsAny(value, ":<>\"|?*") {
+			return fmt.Errorf("component contains a character unsupported by Windows")
+		}
+		if windowsReserved.MatchString(value) {
+			return fmt.Errorf("component uses a Windows reserved name")
+		}
 	}
 	for _, r := range value {
 		if r < 0x20 || r == 0x7f || unicode.Is(unicode.Cf, r) {
-			return fmt.Errorf("component contains an unsupported control character")
+			return fmt.Errorf("component contains a control or format character unsupported by SPAS")
 		}
 	}
 	return nil

@@ -26,28 +26,16 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestParseRejectsNonPortablePaths(t *testing.T) {
+func TestParseRejectsUnsafeOrUnrepresentablePaths(t *testing.T) {
 	t.Parallel()
 
 	for _, value := range []string{
 		"",
 		"../secret",
 		"/absolute",
-		"C:/absolute",
-		"C:relative",
 		"//server/share/private",
-		`\\server\share\private`,
 		".git/config",
 		"nested/.GiT/config",
-		"CON",
-		"folder/NUL.txt",
-		"folder/COM¹.log",
-		"CONIN$",
-		"file.",
-		"file ",
-		"stream:name",
-		`invalid*name`,
-		`literal\backslash`,
 		"line\nbreak",
 		"carriage\rreturn",
 		"control\u0001character",
@@ -56,6 +44,25 @@ func TestParseRejectsNonPortablePaths(t *testing.T) {
 	} {
 		if _, err := Parse(value); err == nil {
 			t.Errorf("Parse(%q) error = nil, want non-nil", value)
+		}
+	}
+}
+
+func TestParseUsesHostFilenameSyntax(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{
+		"CON", "folder/NUL.txt", "folder/COM¹.log", "CONIN$", "CONOUT$",
+		"file.", "file ", "stream:name", `invalid*name`, `question?name`,
+		`angle<>name`, `quote"name`, `pipe|name`, `literal\backslash`,
+		"C:/relative", "C:relative", `\\server\share\private`,
+	} {
+		got, err := Parse(value)
+		if runtime.GOOS == "windows" {
+			if err == nil {
+				t.Errorf("Parse(%q) accepted unsupported Windows syntax", value)
+			}
+		} else if err != nil || got.String() != value {
+			t.Errorf("Parse(%q) = %q, %v; want literal path", value, got, err)
 		}
 	}
 }

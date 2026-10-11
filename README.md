@@ -77,6 +77,24 @@ SPAS coordinates three distinct layers:
 
 ---
 
+### Filename Support
+
+SPAS accepts filename punctuation, device-name spellings, and trailing dots or
+spaces when supported by the host's Git and filesystem operations. For example,
+`notes:2026.md`, `CON`, and `draft*.txt` can be managed on Unix filesystems that
+represent them. Exclusions and Git operations treat these names literally.
+Windows rejects its reserved names and characters, alternate data streams, and
+trailing dots or spaces. An asset set accepted on one machine may fail on another;
+SPAS reports the failing path rather than renaming it.
+
+Paths must remain inside the workspace and be representable in SPAS state and
+exclusion rules: valid UTF-8 without control or Unicode format characters. Git
+metadata, SPAS's temporary directory, symlinks, submodules, LFS pointers, and Git
+control files remain unsupported. Unicode NFC normalization, conservative
+case-collision checks, the 255-byte component limit, and the Windows 260-byte
+absolute-path preflight still apply; native identity and length changes remain
+pending.
+
 ## Installation
 
 Download the pre-compiled binary for your system from the [latest GitHub release](https://github.com/getspas/spas/releases/latest), rename it to `spas` (or `spas.exe` on Windows), and place it in your system `PATH`. On macOS and Linux, make it executable with `chmod +x spas`.

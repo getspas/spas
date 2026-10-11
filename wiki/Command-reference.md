@@ -33,7 +33,7 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. By default it runs a networked visibility probe with Git credential helpers and prompts disabled, then prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--allow-public` and `--dry-run` both skip the probe. Owner and repository names are case-insensitive and canonicalized to lowercase.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. Except with `--dry-run`, it probes anonymous readability with Git credential helpers and prompts disabled. Detected public readability produces a warning on stderr and requires no approval, including in non-interactive mode. Sync checks again on each invocation that reaches its visibility check; dry-run and local merge abort do not probe. An unsuccessful probe does not prove private visibility; authenticated Git operations determine usability. Owner and repository names are case-insensitive and canonicalized to lowercase.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -41,7 +41,6 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving or network access |
-| `--allow-public` | Flag | `false` | Accept public-repository risk and skip the visibility probe (approval is recorded in link state; later syncs skip the probe) |
 
 ### Link Examples
 
@@ -153,7 +152,6 @@ SPAS never creates commits in your project repository.
 | `--continue` | Flag | `false` | Continue a merge in the linked repository after resolving conflicts |
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
-| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
 
 ### Verified Merge Protection
 
@@ -323,7 +321,7 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ok": false,
   "error": {
     "code": "decision_required",

@@ -30,7 +30,7 @@ import (
 
 var removePrivateClone = os.RemoveAll
 
-const JSONSchemaVersion = 1
+const JSONSchemaVersion = 2
 
 type App struct {
 	Git      gitexec.Runner
@@ -62,12 +62,11 @@ const (
 )
 
 type LinkOptions struct {
-	Repository  string
-	Transport   provider.Transport
-	Branch      string
-	Replace     bool
-	DryRun      bool
-	AllowPublic bool
+	Repository string
+	Transport  provider.Transport
+	Branch     string
+	Replace    bool
+	DryRun     bool
 }
 
 func (a App) Link(ctx context.Context, options LinkOptions) error {
@@ -96,34 +95,14 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			return err
 		}
 	}
-	publicApproved := false
 	probed := false
-	if !options.AllowPublic && !options.DryRun {
-		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
-		if probeErr != nil {
-			return probeErr
+	if !options.DryRun {
+		if err := a.warnPublicRepository(ctx, ref); err != nil {
+			return err
 		}
 		probed = true
-		if isPublic {
-			approved, err := a.Prompt.Confirm(
-				ctx,
-				fmt.Sprintf("Repository %q is publicly readable on GitHub. Managed private assets will be publicly accessible. Continue?", ref.Canonical),
-				false,
-				false,
-			)
-			if err != nil {
-				return err
-			}
-			if !approved {
-				return fmt.Errorf("linking publicly readable repository declined")
-			}
-			publicApproved = true
-		}
-	} else if options.AllowPublic {
-		publicApproved = true
 	}
 	state := linkstate.New(repository.Root, repository.CommonDir, ref, options.Branch, a.Store)
-	state.Private.PublicApproved = publicApproved
 	if !options.DryRun {
 		linkLock, err := lock.Acquire(filepath.Join(a.Store.DataDir, "locks"), state.LinkID)
 		if err != nil {

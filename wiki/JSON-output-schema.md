@@ -10,11 +10,11 @@ All JSON payloads emitted by SPAS include a root-level `"schemaVersion"` field:
 
 ```json
 {
-  "schemaVersion": 1
+  "schemaVersion": 2
 }
 ```
 
-- **Current Version:** `1`
+- **Current Version:** `2`
 - **Field Guarantee:** The `"schemaVersion"` field is guaranteed to be an integer present at the root of every JSON response on both stdout and stderr.
 - **Breaking Changes:** Any breaking modification to top-level keys or semantic payload types will increment the `schemaVersion`.
 
@@ -26,7 +26,7 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ok": false,
   "error": {
     "code": "decision_required",
@@ -39,12 +39,39 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `schemaVersion` | `integer` | JSON schema version (`1`). |
+| `schemaVersion` | `integer` | JSON schema version (`2`). |
 | `ok` | `boolean` | Always `false` on error. |
 | `error.code` | `string` | Stable machine-readable error classification (e.g. `not_linked`, `decision_required`, `path_conflict`). |
 | `error.message` | `string` | Human-readable explanation of the failure. |
 
 A command that already wrote its structured payload (for example `spas doctor` reporting findings) exits nonzero without emitting a second envelope.
+
+---
+
+## Warning records (schema 2)
+
+Stdout retains each command's result payload. Stderr is a newline-delimited JSON
+stream: each warning is emitted immediately as a separate object, followed by
+the existing error envelope if a later step fails. A successful command may
+therefore have nonempty stderr. Decode stderr as a sequence of JSON objects,
+rather than as one document. No human prose, prompts, progress, or ANSI bytes
+are mixed into these streams.
+
+```json
+{"schemaVersion":2,"warning":{"code":"public_repository","message":"Repository \"getspas/assets\" is publicly readable. Anyone may read managed assets stored there."}}
+```
+
+`warning` contains exactly `code` (stable string) and `message` (readable string).
+`public_repository` means the anonymous GitHub readability probe succeeded; it
+requires no approval and does not change the exit status. Link and sync recheck
+readability each time they reach that check. No warning is emitted for an
+inconclusive probe; this does not assert private visibility. Dry-run and local
+merge abort do not probe. Warnings already emitted remain available when a
+later step fails, including a missing commit decision (exit 4), without adding a
+success result to stdout.
+
+Schema 2 deliberately versions this change from schema 1's error-only stderr.
+Other result and error keys retain their existing shapes.
 
 ---
 
@@ -62,7 +89,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "linked": true,
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
@@ -71,13 +98,13 @@ Conventions used below:
 ```
 
 - `publicWorkspace` — absolute path of the linked workspace root.
-- `networkAccess` — `true` if the visibility probe executed during this invocation; `false` when `--allow-public` bypassed the probe.
+- `networkAccess` — `true` if the visibility probe executed during this invocation; `false` for dry-run.
 
 #### Link Dry-Run Payload (`--dry-run`)
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "action": "link",
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
@@ -98,7 +125,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "added": [
     "config/dev.json",
     "testdata/mock-api.json"
@@ -118,7 +145,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "action": "add",
   "added": [
     "config/dev.json"
@@ -145,7 +172,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "pendingRemovals": [
     "config/dev.json"
   ],
@@ -162,7 +189,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "action": "remove",
   "pendingAdds": [],
   "pendingRemovals": [
@@ -181,7 +208,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "synchronized": true,
   "privateCommitCreated": true,
   "managedFiles": 2,
@@ -200,7 +227,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "synchronized": true,
   "mergeContinued": true
 }
@@ -214,7 +241,7 @@ One of three shapes, depending on the recorded recovery state:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "mergeAborted": true,
   "gitNativeRecovery": true
 }
@@ -224,7 +251,7 @@ A Git-native merge without SPAS recovery state was aborted.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "mergeAborted": false,
   "mergeRecoveryCleared": true
 }
@@ -234,7 +261,7 @@ SPAS merge recovery state was cleared; `mergeAborted` reports whether a Git merg
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "mergeAborted": true,
   "skippedPublicPaths": [],
   "deferredPaths": []
@@ -249,7 +276,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "action": "sync",
   "networkRequired": true,
   "privateInitialized": false,
@@ -264,7 +291,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "action": "sync",
   "networkRequired": false,
   "privateInitialized": true,
@@ -304,7 +331,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "linked": true,
   "linkId": "lnk_3f9a2b4c17d0",
   "publicBranch": "main",
@@ -348,7 +375,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "changedPaths": [
     "config/dev.json",
     "docs/team-notes.md"
@@ -362,7 +389,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "stagedPaths": [
     "config/dev.json"
   ]
@@ -380,7 +407,7 @@ alias, and staged-rename behavior shared by JSON and text output.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "healthy": true,
   "checks": [
     {
@@ -425,7 +452,7 @@ alias, and staged-rename behavior shared by JSON and text output.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "unlinked": true,
   "keptFiles": true
 }
@@ -444,7 +471,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "version": "1.0.0",
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "date": "2026-08-30T00:00:00Z"

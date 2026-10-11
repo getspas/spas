@@ -2,6 +2,7 @@ package githubref
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -105,6 +106,8 @@ func fromPath(value string, transport provider.Transport) (provider.RepositoryRe
 // ProbePublic checks whether a GitHub repository is publicly readable without credentials.
 // It executes git ls-remote against the public HTTPS endpoint with credential helpers,
 // askpass helpers, and terminal prompts disabled.
+// A Git exit failure is inconclusive about visibility; execution failures and
+// cancellation are returned to the caller.
 func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provider.RepositoryRef) (bool, error) {
 	if ref.Canonical == "" && ref.RemoteURL == "" {
 		return false, nil
@@ -122,5 +125,9 @@ func (Provider) ProbePublic(ctx context.Context, git gitexec.Runner, ref provide
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
-	return false, nil
+	var exitError *gitexec.ExitError
+	if errors.As(err, &exitError) {
+		return false, nil
+	}
+	return false, fmt.Errorf("probe anonymous GitHub readability: %w", err)
 }

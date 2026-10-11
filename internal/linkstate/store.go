@@ -19,7 +19,7 @@ import (
 	"github.com/getspas/spas/internal/provider"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 const (
 	ClonePreparing = "preparing"
@@ -63,7 +63,6 @@ type Private struct {
 	ExpectedHead        string               `json:"expectedHead,omitempty"`
 	Initialization      *CloneInitialization `json:"initialization,omitempty"`
 	RemoteEmpty         bool                 `json:"remoteEmpty,omitempty"`
-	PublicApproved      bool                 `json:"publicApproved,omitempty"`
 }
 
 type CloneInitialization struct {

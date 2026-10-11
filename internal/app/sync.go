@@ -52,7 +52,6 @@ type SyncOptions struct {
 	Continue             bool
 	Abort                bool
 	DryRun               bool
-	AllowPublic          bool
 }
 
 var ErrPrivateMergeConflict = errors.New("private merge conflict")
@@ -129,40 +128,15 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		return err
 	}
 
-	if !state.Private.PublicApproved && a.Provider != nil {
-		approvedThisRun := options.AllowPublic
-		if !options.AllowPublic {
-			ref := provider.RepositoryRef{
-				Provider:  state.Private.Provider,
-				Canonical: state.Private.Repository,
-				Transport: state.Private.Transport,
-				RemoteURL: state.Private.RemoteURL,
-			}
-			isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
-			if probeErr != nil {
-				return probeErr
-			}
-			if isPublic {
-				approved, err := a.Prompt.Confirm(
-					ctx,
-					fmt.Sprintf("Repository %q is publicly readable on GitHub. Syncing will make managed assets publicly accessible. Continue?", state.Private.Repository),
-					false,
-					false,
-				)
-				if err != nil {
-					return err
-				}
-				if !approved {
-					return fmt.Errorf("syncing to publicly readable repository declined")
-				}
-				approvedThisRun = true
-			}
+	if a.Provider != nil {
+		ref := provider.RepositoryRef{
+			Provider:  state.Private.Provider,
+			Canonical: state.Private.Repository,
+			Transport: state.Private.Transport,
+			RemoteURL: state.Private.RemoteURL,
 		}
-		if approvedThisRun {
-			state.Private.PublicApproved = true
-			if err := a.Store.Save(state); err != nil {
-				return err
-			}
+		if err := a.warnPublicRepository(ctx, ref); err != nil {
+			return err
 		}
 	}
 	ignoreCase, err := a.casePolicy(ctx, repository)
@@ -2113,6 +2087,17 @@ func (a App) ensurePrivateIdentity(ctx context.Context, public publicgit.Reposit
 func (a App) continueSync(ctx context.Context, repository publicgit.Repository, state *linkstate.State, options SyncOptions) (returnErr error) {
 	if !state.Private.Initialized {
 		return fmt.Errorf("private repository is not initialized")
+	}
+	if a.Provider != nil {
+		ref := provider.RepositoryRef{
+			Provider:  state.Private.Provider,
+			Canonical: state.Private.Repository,
+			Transport: state.Private.Transport,
+			RemoteURL: state.Private.RemoteURL,
+		}
+		if err := a.warnPublicRepository(ctx, ref); err != nil {
+			return err
+		}
 	}
 	private := a.privateRepository(*state)
 	if err := private.EnsureSafety(ctx); err != nil {

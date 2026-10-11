@@ -813,6 +813,24 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	if err := os.WriteFile(localFile, []byte("resolved change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Readability must be rechecked when publishing a resolved merge, including
+	// propagation of cancellation before changing the merge or remote head.
+	var warnings bytes.Buffer
+	instance.Err = &warnings
+	before := gitOutput(t, root, "--git-dir="+remote, "rev-parse", "main")
+	stateBefore := loadState(t, instance, publicRoot)
+	privateBefore := gitOutput(t, stateBefore.Private.LocalRepositoryPath, "rev-parse", "HEAD")
+	instance.Provider = testRepositoryProvider{remoteURL: remote, probeErr: context.Canceled}
+	if err := instance.Sync(ctx, SyncOptions{Continue: true, Message: "Resolve architecture conflict"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("continue canceled probe: %v", err)
+	}
+	if warnings.Len() != 0 || loadState(t, instance, publicRoot).ActiveMerge == nil ||
+		gitOutput(t, root, "--git-dir="+remote, "rev-parse", "main") != before ||
+		gitOutput(t, stateBefore.Private.LocalRepositoryPath, "rev-parse", "HEAD") != privateBefore {
+		t.Fatal("canceled visibility probe changed merge/publication state or emitted warning")
+	}
+	var probeCalls int
+	instance.Provider = testRepositoryProvider{remoteURL: remote, isPublic: true, probeCalls: &probeCalls}
 	publicIgnore := filepath.Join(publicRoot, ".gitignore")
 	if err := os.WriteFile(publicIgnore, []byte("!docs/ARCHITECTURE.md\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -824,6 +842,9 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not effectively excluded") {
 		t.Fatalf("continue with ineffective exclusion error = %v", err)
 	}
+	if !strings.Contains(warnings.String(), "warning:") || !strings.Contains(warnings.String(), "publicly readable") {
+		t.Fatalf("continue failure warning: %q", warnings.String())
+	}
 	state := loadState(t, instance, publicRoot)
 	if state.ActiveMerge == nil {
 		t.Fatal("failed continue cleared active merge state")
@@ -831,11 +852,19 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	if err := os.Remove(publicIgnore); err != nil {
 		t.Fatal(err)
 	}
+	warnings.Reset()
+	instance.JSON = true
+	out := instance.Out.(*bytes.Buffer)
+	out.Reset()
 	if err := instance.Sync(ctx, SyncOptions{
 		Continue: true,
 		Message:  "Resolve architecture conflict",
 	}); err != nil {
 		t.Fatalf("continue Sync() error = %v", err)
+	}
+	assertJSONContract(t, out.Bytes(), []string{"mergeContinued", "schemaVersion", "synchronized"})
+	if probeCalls != 2 || !strings.Contains(warnings.String(), `"code":"public_repository"`) || !strings.HasPrefix(warnings.String(), `{"schemaVersion":2,"warning":`) {
+		t.Fatalf("continued merge probes %d, warning %q", probeCalls, warnings.String())
 	}
 	if got := gitOutput(t, root, "--git-dir="+remote, "show", "main:docs/ARCHITECTURE.md"); got != "resolved change\n" {
 		t.Fatalf("resolved private file = %q", got)
@@ -1294,6 +1323,7 @@ type testRepositoryProvider struct {
 	remoteURL  string
 	isPublic   bool
 	probeCalls *int
+	probeErr   error
 }
 
 func (testRepositoryProvider) ID() provider.ID { return githubref.ID }
@@ -1311,10 +1341,10 @@ func (p testRepositoryProvider) ProbePublic(ctx context.Context, git gitexec.Run
 	if p.probeCalls != nil {
 		*p.probeCalls++
 	}
-	if p.isPublic {
-		return true, nil
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
-	return (githubref.Provider{}).ProbePublic(ctx, git, ref)
+	return p.isPublic, p.probeErr
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

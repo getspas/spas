@@ -290,6 +290,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	sort.Slice(additions, func(i, j int) bool { return additions[i] < additions[j] })
 	sort.Slice(pendingRemoves, func(i, j int) bool { return pendingRemoves[i].Path < pendingRemoves[j].Path })
 	sort.Slice(cancelledRemovals, func(i, j int) bool { return cancelledRemovals[i] < cancelledRemovals[j] })
+	priorExcluded := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
 	state.PendingAdds = pathsToStrings(additions)
 	state.PendingRemoves = pendingRemoves
 	if err := a.Store.Validate(state); err != nil {
@@ -331,7 +332,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 		})
 	}
 
-	if err := exclude.Apply(excludePlan); err != nil {
+	if err := a.applyExclusions(excludePlan, priorExcluded); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, managed); err != nil {
@@ -497,6 +498,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 			"unenrolled":        unenrolled,
 		})
 	}
+	priorExcluded := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
 	state.PendingAdds = pathsToStrings(mapPathValues(pendingAdds))
 	state.PendingRemoves = removes
 	excludePath, err := repository.InfoExcludePath(ctx)
@@ -512,7 +514,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(plan); err != nil {
+	if err := a.applyExclusions(plan, priorExcluded); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, remainingManaged); err != nil {
@@ -872,7 +874,7 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(plan); err != nil {
+	if err := a.applyExclusions(plan, expectedExclusions(state)...); err != nil {
 		return err
 	}
 	rollbackMetadata := func(primary error) error {

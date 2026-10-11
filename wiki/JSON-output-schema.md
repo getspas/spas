@@ -70,6 +70,18 @@ merge abort do not probe. Warnings already emitted remain available when a
 later step fails, including a missing commit decision (exit 4), without adding a
 success result to stdout.
 
+`exclusion_drift_repaired` means an exclusion-writing command reconciled a
+missing or unexpectedly edited owned block with authoritative link state.
+Ordinary enrollment/removal changes stay quiet. The warning reports a completed
+exclude-file write, not overall command success: a later effective-exclusion or
+state-save failure may roll that write back. A retry can then warn again.
+Rules whose ownership markers are no longer recognizable remain external and
+can survive unlink. Doctor and dry-run do not repair or emit this warning.
+
+```json
+{"schemaVersion":2,"warning":{"code":"exclusion_drift_repaired","message":"Reconciled unexpected changes to the owned exclusion block with link state."}}
+```
+
 Schema 2 deliberately versions this change from schema 1's error-only stderr.
 Other result and error keys retain their existing shapes.
 

@@ -96,6 +96,14 @@ spas doctor --json
   2. Open the reported `.gitignore` file and remove or adjust the negation pattern (e.g. change `!config/dev.json` so it does not match SPAS-managed private files).
   3. Run `spas doctor` to verify that all managed paths are now effectively excluded.
 
+### Unexpected exclusion repair warnings
+
+`exclusion_drift_repaired` indicates that an exclusion-writing operation rebuilt missing or edited owned rules from link state. Check for an editor or tool modifying the SPAS block. Edit outside the exact ownership markers and avoid concurrent writes. The warning can precede a later error and rollback; it does not certify overall success. Ordinary enrollment/removal changes do not warn.
+
+Malformed or duplicate matching markers are errors, not automatic repairs. Open the exclude file named in the error. Restore exactly one correctly ordered `# BEGIN SPAS link=<block-id>` / `# END SPAS link=<block-id>` pair, or remove only the verified owned block and retry. Preserve outside rules. `spas doctor` diagnoses without repairing.
+
+If both markers no longer match, SPAS preserves the old text as external content. Those rules may continue to ignore files after unlink; inspect and remove them manually if appropriate. A reconstructed block still cannot defeat higher-precedence `.gitignore` negations: resolve the effective-exclusion error above.
+
 ### `lock_held` (Exit Code 10)
 
 - **Cause:** Another SPAS process is currently running and holding the advisory lock on this link or exclude file.

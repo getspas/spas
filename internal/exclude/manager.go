@@ -47,7 +47,7 @@ func buildPlan(path string, before []byte, beforeExists bool, linkID string, man
 	end := []byte("# END SPAS link=" + linkID)
 	startIndex, _, blockEnd, err := locateBlock(before, start, end)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, fmt.Errorf("%w in %q; manually restore exactly one matching BEGIN/END pair for link %q, or remove only its verified owned block and retry; preserve outside rules", err, path, linkID)
 	}
 
 	newline := []byte("\n")
@@ -98,8 +98,12 @@ func buildPlan(path string, before []byte, beforeExists bool, linkID string, man
 	return plan, nil
 }
 
-func Apply(plan Plan) error {
-	return wrapValidationError(withLock(plan.Path, func() error {
+// Apply compares the owned block read under the lock with the expected prior
+// paths. Recovery callers may supply the recorded sets on either side of an
+// interrupted write. The result reports a completed repair, not a stale
+// planning observation.
+func Apply(plan Plan, expected ...[]pathmodel.Path) (repaired bool, err error) {
+	err = wrapValidationError(withLock(plan.Path, func() error {
 		current, currentExists, currentMode, err := readRegularOrMissing(plan.Path)
 		if err != nil {
 			return err
@@ -108,8 +112,24 @@ func Apply(plan Plan) error {
 		if err != nil {
 			return err
 		}
-		return replaceDocument(plan.Path, currentExists, currentMode, latest.After, latest.AfterExists)
+		if err := replaceDocument(plan.Path, currentExists, currentMode, latest.After, latest.AfterExists); err != nil {
+			return err
+		}
+		observedBlock := bytes.ReplaceAll(latest.originalBlock, []byte("\r\n"), []byte("\n"))
+		repaired = latest.Changed
+		for _, paths := range expected {
+			var expectedBlock []byte
+			if len(paths) > 0 {
+				expectedBlock = buildBlock([]byte("# BEGIN SPAS link="+plan.linkID), []byte("# END SPAS link="+plan.linkID), []byte("\n"), paths)
+			}
+			if bytes.Equal(observedBlock, expectedBlock) {
+				repaired = false
+				break
+			}
+		}
+		return nil
 	}))
+	return repaired, err
 }
 
 func Restore(plan Plan) error {

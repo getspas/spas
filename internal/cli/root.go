@@ -108,7 +108,14 @@ while keeping them at their normal paths in the project workspace.
 
 SPAS writes exact paths only to the project repository's local exclude file.
 It never edits .gitignore or global Git exclusions, and it never creates a
-commit in the project repository.`,
+commit in the project repository.
+
+Link state determines which assets are enrolled. Exclusion-writing commands
+rebuild missing or edited owned rules and warn when they repair unexpected
+changes. Edit outside the exact SPAS BEGIN/END markers; unrecognized marker
+text remains external and can survive unlink. Malformed or duplicate matching
+markers require manual repair: restore exactly one matching pair, or remove
+only the verified owned block and retry. Doctor diagnoses without repairs.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Version,

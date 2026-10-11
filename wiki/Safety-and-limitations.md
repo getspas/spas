@@ -50,7 +50,15 @@ SPAS stops immediately and reports the condition when it encounters an unsupport
 
 ## 5. Git Safeguards & Destructive Operations
 
-The local exclusion block inside `.git/info/exclude` prevents standard Git operations from tracking managed files. However, it is subject to Git precedence rules:
+Link state determines enrollment. Manual changes to `.git/info/exclude` do not enroll or remove assets. When a command writes exclusions, it reconstructs missing or edited recognizable owned rules and emits `exclusion_drift_repaired` if it repaired unexpected changes. Ordinary enrollment and removal changes do not produce this warning. Dry-run and `spas doctor` remain read-only.
+
+Only exact `# BEGIN SPAS link=<block-id>` and `# END SPAS link=<block-id>` lines identify the owned block. SPAS preserves outside rules. If both markers become unrecognizable, their text and old rules remain external content; SPAS may append a new owned block, and the old external rules can survive unlink. Review those rules manually if files remain ignored after unlink.
+
+Malformed or duplicate matching markers cause exit 9. Inspect the exclude file named in the error and restore exactly one correctly ordered matching BEGIN/END pair, or remove only the verified owned block and retry. Preserve outside rules; SPAS does not guess ownership.
+
+SPAS rereads and rebuilds under its advisory lock, preserving outside edits completed before that read. The lock does not prevent a noncooperating editor from racing atomic replacement, removing exclusions later, or exposing files between commands. Avoid concurrent writes during SPAS mutations and edit outside its block.
+
+The local exclusion block prevents standard Git operations from tracking managed files. However, it is subject to Git precedence rules:
 
 > [!WARNING]
 >

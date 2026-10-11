@@ -119,6 +119,9 @@ func TestEndToEndEmptyPrivateRepository(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(publicRoot, ".env")); !os.IsNotExist(err) {
 		t.Fatalf(".env still exists after private removal: %v", err)
 	}
+	if strings.Contains(output.String(), "Reconciled unexpected") {
+		t.Fatalf("ordinary synchronization and removal warned about drift: %s", output.String())
+	}
 }
 
 func TestAddDirectoryEnrollsCurrentGitignoredFilesOnly(t *testing.T) {
@@ -789,7 +792,10 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other, "docs", "ARCHITECTURE.md"), []byte("remote change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, other, "add", "docs/ARCHITECTURE.md")
+	if err := os.WriteFile(filepath.Join(other, "new.env"), []byte("new remote asset\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, other, "add", "docs/ARCHITECTURE.md", "new.env")
 	runGit(t, other, "commit", "-q", "-m", "remote conflicting change")
 	runGit(t, other, "push", "-q", "origin", "main")
 
@@ -852,6 +858,9 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	if err := os.Remove(publicIgnore); err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(warnings.String(), "Reconciled unexpected") {
+		t.Fatalf("ordinary merge continuation warned before verification: %s", warnings.String())
+	}
 	warnings.Reset()
 	instance.JSON = true
 	out := instance.Out.(*bytes.Buffer)
@@ -868,6 +877,9 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 	}
 	if got := gitOutput(t, root, "--git-dir="+remote, "show", "main:docs/ARCHITECTURE.md"); got != "resolved change\n" {
 		t.Fatalf("resolved private file = %q", got)
+	}
+	if strings.Contains(warnings.String(), "Reconciled unexpected") {
+		t.Fatalf("ordinary merge continuation warned about drift: %s", warnings.String())
 	}
 }
 

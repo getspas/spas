@@ -65,7 +65,7 @@ Enroll local regular files under SPAS management.
 spas add PATH... [flags]
 ```
 
-`spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged.
+`spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged. Link state determines enrollment; editing exclusions does not change the managed asset set. Exclusion-writing commands rebuild missing or edited owned rules and report unexpected repairs on stderr (JSON code `exclusion_drift_repaired`). Ordinary requested enrollment/removal changes stay quiet. See [Safety and Limitations](Safety-and-limitations) for ownership markers, manual repair, and concurrency limits.
 
 Accepted filesystem aliases are enrolled using the actual directory-entry case
 and Unicode NFC spelling. This is the spelling used in state and exclusion rules.
@@ -278,7 +278,10 @@ spas unlink [flags]
 | `--remove-private-clone` | Flag | `false` | Delete the local managed checkout from storage |
 | `--force` | Flag | `false` | Bypass pending-recovery and asset safety checks when unlinking |
 
+Rules outside the exact owned block are preserved. If old ownership markers no longer match, those rules remain external and may survive unlink; review them manually if files stay ignored.
+
 > [!WARNING]
+>
 > Unlinking with `--keep-files` removes the `.git/info/exclude` rules. Git will immediately see those files as untracked. Review `git status` before committing to avoid accidental secret leaks.
 
 ---

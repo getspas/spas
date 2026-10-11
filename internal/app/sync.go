@@ -485,7 +485,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		}
 	}()
 
-	if err := exclude.Apply(excludePlan); err != nil {
+	if err := a.applyExclusions(excludePlan, expectedExclusions(state)...); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, excludeManaged); err != nil {
@@ -820,7 +820,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(finalExcludePlan); err != nil {
+	if err := a.applyExclusions(finalExcludePlan, excludeManaged); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, finalExclude); err != nil {
@@ -1416,7 +1416,7 @@ func (a App) resumeMaterialization(
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(recoveryPlan); err != nil {
+	if err := a.applyExclusions(recoveryPlan, expectedExclusions(*state)...); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, recoveryExclude); err != nil {
@@ -1618,7 +1618,7 @@ func (a App) resumeMaterialization(
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(finalPlan); err != nil {
+	if err := a.applyExclusions(finalPlan, recoveryExclude); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, finalExclude); err != nil {
@@ -2318,7 +2318,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(preResolutionPlan); err != nil {
+	if err := a.applyExclusions(preResolutionPlan, expectedExclusions(*state)...); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, preResolutionExcluded); err != nil {
@@ -2550,7 +2550,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(excludePlan); err != nil {
+	if err := a.applyExclusions(excludePlan, preResolutionExcluded); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, excluded); err != nil {
@@ -3041,7 +3041,7 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(excludePlan); err != nil {
+	if err := a.applyExclusions(excludePlan, expectedExclusions(*state)...); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, excluded); err != nil {

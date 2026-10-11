@@ -46,7 +46,8 @@ SPAS stops immediately and reports the condition when it encounters an unsupport
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
 - **Host Filename Syntax:** Punctuation, Windows device-name spellings, and trailing dots or spaces are accepted on hosts whose Git and filesystem operations support them. Windows rejects its reserved names and characters, alternate data streams, and trailing dots or spaces. Git-ignore metacharacters and literal backslashes on Unix are escaped in exclusions and treated literally by Git operations. Compatibility of an asset set across machines is the user's responsibility; failed native operations report the affected path.
 - **State and Exclusion Representation:** Paths must be valid UTF-8 and contain no control or Unicode format characters. These are SPAS representation and safety restrictions, separate from native filename rules. Paths cannot escape the workspace, traverse unsafe ancestors, or address Git metadata or SPAS's reserved temporary directory.
-- **Current Identity & Length Limits:** Unicode NFC normalization and conservative case-collision checks still apply. Filename components exceeding 255 UTF-8 bytes are rejected on all platforms. On Windows, SPAS conservatively rejects paths when either the workspace or private-clone absolute path reaches 260 UTF-8 bytes. This byte-count preflight is stricter than the native `MAX_PATH` character limit for non-ASCII names. Native identity and length-policy changes remain pending; Git or the filesystem can impose additional limits.
+- **Native Path Identity:** Exact Git spellings remain separate from filesystem equivalence. Case and Unicode variants can coexist when both actual destinations distinguish them. SPAS probes the relevant existing parent directories, rejects real file/file or file/directory aliases before application, and preserves each asset's content and executable state independently. Imported Git names are not silently rewritten to NFC. Enrollment observes the native directory-entry spelling. On normalization-aliasing filesystems, owned exclusions also cover Git's precomposed enumeration spelling. Changing `core.ignoreCase` cannot make a destination represent distinct files.
+- **Current Length Limits:** Filename components exceeding 255 UTF-8 bytes when measured in NFC are rejected on all platforms; this measurement does not rewrite the stored Git identity. On Windows, SPAS conservatively rejects paths when either the workspace or private-clone absolute path reaches 260 UTF-8 bytes. This byte-count preflight is stricter than the native `MAX_PATH` character limit for non-ASCII names. Native length-policy changes remain pending; Git or the filesystem can impose additional limits.
 
 ---
 
@@ -121,3 +122,11 @@ nonzero and names the remaining checkout paths. The workspace remains unlinked.
 - [x] Ensure your repository is a single worktree.
 - [x] Use regular files (avoid symlinks, junctions, or submodules).
 - [x] Run `spas sync` regularly to keep assets safely backed up on GitHub.
+
+## Development link-state compatibility
+
+Link-state schema 4 preserves exact path references and records the private
+replacement associated with each approved project ownership override. Recovery
+uses that recorded association rather than reconstructing it by case folding.
+Older development-state schemas are rejected without migration; synchronize and
+unlink using the previous build before upgrading.

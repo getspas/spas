@@ -872,7 +872,7 @@ func TestPrivateMergeConflictCanContinue(t *testing.T) {
 		t.Fatalf("continue Sync() error = %v", err)
 	}
 	assertJSONContract(t, out.Bytes(), []string{"mergeContinued", "schemaVersion", "synchronized"})
-	if probeCalls != 2 || !strings.Contains(warnings.String(), `"code":"public_repository"`) || !strings.HasPrefix(warnings.String(), `{"schemaVersion":2,"warning":`) {
+	if probeCalls != 2 || !strings.Contains(warnings.String(), `"code":"public_repository"`) || !strings.HasPrefix(warnings.String(), `{"schemaVersion":3,"warning":`) {
 		t.Fatalf("continued merge probes %d, warning %q", probeCalls, warnings.String())
 	}
 	if got := gitOutput(t, root, "--git-dir="+remote, "show", "main:docs/ARCHITECTURE.md"); got != "resolved change\n" {
@@ -1127,6 +1127,7 @@ func TestCompletedMergeContinuationRecoversBeforePush(t *testing.T) {
 		state.ManagedPaths,
 		finalPaths,
 		finalPaths,
+		nil,
 		nil,
 		nil,
 		nil,

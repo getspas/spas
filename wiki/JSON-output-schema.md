@@ -10,13 +10,18 @@ All JSON payloads emitted by SPAS include a root-level `"schemaVersion"` field:
 
 ```json
 {
-  "schemaVersion": 2
+  "schemaVersion": 3
 }
 ```
 
-- **Current Version:** `2`
+- **Current Version:** `3`
 - **Field Guarantee:** The `"schemaVersion"` field is guaranteed to be an integer present at the root of every JSON response on both stdout and stderr.
 - **Breaking Changes:** Any breaking modification to top-level keys or semantic payload types will increment the `schemaVersion`.
+
+Schema 3 replaces portability-based collision classifications with
+`native_filesystem_alias`, reflecting actual destination equivalence. Result,
+error, and warning envelope fields are unchanged. The persisted link-state
+schema is separate from this output schema.
 
 ---
 
@@ -26,7 +31,7 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "ok": false,
   "error": {
     "code": "decision_required",
@@ -39,7 +44,7 @@ When any command fails in `--json` mode, SPAS writes a structured error object t
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `schemaVersion` | `integer` | JSON schema version (`2`). |
+| `schemaVersion` | `integer` | JSON schema version (`3`). |
 | `ok` | `boolean` | Always `false` on error. |
 | `error.code` | `string` | Stable machine-readable error classification (e.g. `not_linked`, `decision_required`, `path_conflict`). |
 | `error.message` | `string` | Human-readable explanation of the failure. |
@@ -48,7 +53,7 @@ A command that already wrote its structured payload (for example `spas doctor` r
 
 ---
 
-## Warning records (schema 2)
+## Warning records (schema 3)
 
 Stdout retains each command's result payload. Stderr is a newline-delimited JSON
 stream: each warning is emitted immediately as a separate object, followed by
@@ -58,7 +63,7 @@ rather than as one document. No human prose, prompts, progress, or ANSI bytes
 are mixed into these streams.
 
 ```json
-{"schemaVersion":2,"warning":{"code":"public_repository","message":"Repository \"getspas/assets\" is publicly readable. Anyone may read managed assets stored there."}}
+{"schemaVersion":3,"warning":{"code":"public_repository","message":"Repository \"getspas/assets\" is publicly readable. Anyone may read managed assets stored there."}}
 ```
 
 `warning` contains exactly `code` (stable string) and `message` (readable string).
@@ -79,7 +84,7 @@ Rules whose ownership markers are no longer recognizable remain external and
 can survive unlink. Doctor and dry-run do not repair or emit this warning.
 
 ```json
-{"schemaVersion":2,"warning":{"code":"exclusion_drift_repaired","message":"Reconciled unexpected changes to the owned exclusion block with link state."}}
+{"schemaVersion":3,"warning":{"code":"exclusion_drift_repaired","message":"Reconciled unexpected changes to the owned exclusion block with link state."}}
 ```
 
 Schema 2 deliberately versions this change from schema 1's error-only stderr.
@@ -101,7 +106,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "linked": true,
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
@@ -116,7 +121,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "action": "link",
   "publicWorkspace": "/path/to/project",
   "privateRepository": "getspas/private-assets",
@@ -137,7 +142,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "added": [
     "config/dev.json",
     "testdata/mock-api.json"
@@ -157,7 +162,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "action": "add",
   "added": [
     "config/dev.json"
@@ -184,7 +189,7 @@ Conventions used below:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "pendingRemovals": [
     "config/dev.json"
   ],
@@ -201,7 +206,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "action": "remove",
   "pendingAdds": [],
   "pendingRemovals": [
@@ -220,7 +225,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "synchronized": true,
   "privateCommitCreated": true,
   "managedFiles": 2,
@@ -239,7 +244,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "synchronized": true,
   "mergeContinued": true
 }
@@ -253,7 +258,7 @@ One of three shapes, depending on the recorded recovery state:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "mergeAborted": true,
   "gitNativeRecovery": true
 }
@@ -263,7 +268,7 @@ A Git-native merge without SPAS recovery state was aborted.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "mergeAborted": false,
   "mergeRecoveryCleared": true
 }
@@ -273,7 +278,7 @@ SPAS merge recovery state was cleared; `mergeAborted` reports whether a Git merg
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "mergeAborted": true,
   "skippedPublicPaths": [],
   "deferredPaths": []
@@ -288,7 +293,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "action": "sync",
   "networkRequired": true,
   "privateInitialized": false,
@@ -303,7 +308,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "action": "sync",
   "networkRequired": false,
   "privateInitialized": true,
@@ -334,7 +339,7 @@ Emitted when the private clone has not been initialized yet:
 ```
 
 - `localChanges` entries have the shape `{"path": "...", "status": "..."}` with status `"A"` (added), `"M"` (modified), or `"D"` (deleted).
-- `conflicts` entries have the shape `{"kind": "...", "publicPath": "...", "privatePath": "..."}` where `kind` is one of `tracked_path`, `file_directory`, `case_insensitive_filesystem`, `cross_platform_filesystem`.
+- `conflicts` entries have the shape `{"kind": "...", "publicPath": "...", "privatePath": "..."}` where `kind` is one of `tracked_path`, `file_directory`, `native_filesystem_alias`.
 - In `mergeProtection`, the keys `value`, `present`, and `ambiguous` are omitted when empty or `false`.
 
 ---
@@ -343,7 +348,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "linked": true,
   "linkId": "lnk_3f9a2b4c17d0",
   "publicBranch": "main",
@@ -387,7 +392,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "changedPaths": [
     "config/dev.json",
     "docs/team-notes.md"
@@ -401,7 +406,7 @@ Emitted when the private clone has not been initialized yet:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "stagedPaths": [
     "config/dev.json"
   ]
@@ -419,7 +424,7 @@ alias, and staged-rename behavior shared by JSON and text output.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "healthy": true,
   "checks": [
     {
@@ -464,7 +469,7 @@ alias, and staged-rename behavior shared by JSON and text output.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "unlinked": true,
   "keptFiles": true
 }
@@ -483,7 +488,7 @@ Conditional keys:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "version": "1.0.0",
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "date": "2026-08-30T00:00:00Z"

@@ -412,12 +412,14 @@ func testMaterialization(
 ) *linkstate.Materialization {
 	t.Helper()
 	overrideMap := make(map[string]pathmodel.Path, len(overrides))
+	replacements := make(map[string]string, len(overrides))
 	for _, value := range overrides {
 		path, err := pathmodel.Parse(value)
 		if err != nil {
 			t.Fatal(err)
 		}
 		overrideMap[value] = path
+		replacements[value] = value
 	}
 	candidates := unionPaths(
 		materializationCandidates(stringsToPaths(final), previous, nil),
@@ -435,6 +437,7 @@ func testMaterialization(
 		nil,
 		nil,
 		overrideMap,
+		replacements,
 		stringsToPaths(recoveryPaths),
 		snapshots,
 		nil,
@@ -2995,7 +2998,7 @@ func TestAddAndRemoveRevalidateEveryManagedExclusion(t *testing.T) {
 
 // A case-only ownership override must survive an unrelated private merge
 // conflict. Active merge state stores the public spelling, while continuation
-// derives and materializes the private spelling from the private index.
+// uses its recorded exact association to materialize the private spelling.
 func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
 	t.Parallel()
 
@@ -3010,6 +3013,11 @@ func TestCaseOnlyOverrideSurvivesPrivateMergeContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(publicDocs, []byte("public design\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(publicRoot, "docs", "ARCHITECTURE.md")); errors.Is(err, os.ErrNotExist) {
+		t.Skip("workspace distinguishes the ownership spellings")
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, publicRoot, "add", "docs/architecture.md")

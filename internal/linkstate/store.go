@@ -19,7 +19,7 @@ import (
 	"github.com/getspas/spas/internal/provider"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 const (
 	ClonePreparing = "preparing"
@@ -117,13 +117,14 @@ type ActiveMerge struct {
 	// ConflictPaths records every private merge-conflict file copied into the
 	// public workspace. It lets unlink remove or report those files even when
 	// they were newly introduced by the remote and were never in ManagedPaths.
-	ConflictPaths           []string         `json:"conflictPaths,omitempty"`
-	SkippedPaths            []string         `json:"skippedPaths"`
-	DeferredPaths           []string         `json:"deferredPaths,omitempty"`
-	OverridePaths           []string         `json:"overridePaths"`
-	RecoveryPaths           []string         `json:"recoveryPaths,omitempty"`
-	RemainingPendingAdds    []string         `json:"remainingPendingAdds,omitempty"`
-	RemainingPendingRemoves []PendingRemoval `json:"remainingPendingRemovals,omitempty"`
+	ConflictPaths           []string          `json:"conflictPaths,omitempty"`
+	SkippedPaths            []string          `json:"skippedPaths"`
+	DeferredPaths           []string          `json:"deferredPaths,omitempty"`
+	OverrideReplacements    map[string]string `json:"overrideReplacements,omitempty"`
+	OverridePaths           []string          `json:"overridePaths"`
+	RecoveryPaths           []string          `json:"recoveryPaths,omitempty"`
+	RemainingPendingAdds    []string          `json:"remainingPendingAdds,omitempty"`
+	RemainingPendingRemoves []PendingRemoval  `json:"remainingPendingRemovals,omitempty"`
 }
 
 type OverrideStatus struct {
@@ -165,6 +166,7 @@ type Materialization struct {
 	ExcludedPaths           []string            `json:"excludedPaths"`
 	SkippedPaths            []string            `json:"skippedPaths,omitempty"`
 	DeferredPaths           []string            `json:"deferredPaths,omitempty"`
+	OverrideReplacements    map[string]string   `json:"overrideReplacements,omitempty"`
 	OverridePaths           []string            `json:"overridePaths,omitempty"`
 	RecoveryPaths           []string            `json:"recoveryPaths,omitempty"`
 	WorkspaceSnapshots      []WorkspaceSnapshot `json:"workspaceSnapshots,omitempty"`
@@ -490,7 +492,7 @@ func validate(state State, store Store) error {
 	}
 	for _, group := range groups {
 		for _, value := range group {
-			if _, err := pathmodel.Parse(value); err != nil {
+			if err := validateStoredPath(value); err != nil {
 				return fmt.Errorf("link state contains invalid managed path %q: %w", value, err)
 			}
 		}
@@ -621,6 +623,9 @@ func validateActiveMergeRecovery(active *ActiveMerge) error {
 		}
 		recovery[path] = struct{}{}
 	}
+	if err := validateOverrideReplacements(active.OverridePaths, active.OverrideReplacements); err != nil {
+		return err
+	}
 	for _, path := range active.OverridePaths {
 		if _, ok := recovery[path]; !ok {
 			return fmt.Errorf("link state active-merge override %q is missing its recovery path", path)
@@ -632,7 +637,7 @@ func validateActiveMergeRecovery(active *ActiveMerge) error {
 	}
 	statuses := make(map[string]struct{}, len(active.OverrideStatuses))
 	for _, status := range active.OverrideStatuses {
-		if _, err := pathmodel.Parse(status.Path); err != nil {
+		if err := validateStoredPath(status.Path); err != nil {
 			return fmt.Errorf("link state contains invalid active-merge override-status path %q: %w", status.Path, err)
 		}
 		if _, duplicate := statuses[status.Path]; duplicate {
@@ -712,6 +717,9 @@ func validateMaterializationSnapshots(materialization *Materialization) error {
 		}
 		recovery[path] = struct{}{}
 	}
+	if err := validateOverrideReplacements(materialization.OverridePaths, materialization.OverrideReplacements); err != nil {
+		return err
+	}
 	for _, path := range materialization.OverridePaths {
 		if _, ok := recovery[path]; !ok {
 			return fmt.Errorf("link state materialization override %q is missing its recovery path", path)
@@ -723,7 +731,7 @@ func validateMaterializationSnapshots(materialization *Materialization) error {
 func validateWorkspaceSnapshots(kind string, snapshots []WorkspaceSnapshot, expected map[string]struct{}) error {
 	found := make(map[string]struct{}, len(snapshots))
 	for _, snapshot := range snapshots {
-		if _, err := pathmodel.Parse(snapshot.Path); err != nil {
+		if err := validateStoredPath(snapshot.Path); err != nil {
 			return fmt.Errorf("link state contains invalid %s snapshot path %q: %w", kind, snapshot.Path, err)
 		}
 		if _, duplicate := found[snapshot.Path]; duplicate {
@@ -789,3 +797,36 @@ func validateObjectID(name, value string) error {
 }
 
 var ErrNotLinked = errors.New("public workspace is not linked")
+
+func validateOverrideReplacements(paths []string, replacements map[string]string) error {
+	if len(paths) != len(replacements) {
+		return fmt.Errorf("link state ownership overrides require exact replacement paths")
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		replacement, found := replacements[path]
+		if !found {
+			return fmt.Errorf("link state ownership override %q has no replacement", path)
+		}
+		parsed, err := pathmodel.Parse(replacement)
+		if err != nil || parsed.String() != replacement {
+			return fmt.Errorf("link state ownership override %q has invalid replacement %q", path, replacement)
+		}
+		if seen[replacement] {
+			return fmt.Errorf("link state ownership overrides share replacement %q", replacement)
+		}
+		seen[replacement] = true
+	}
+	return nil
+}
+
+func validateStoredPath(value string) error {
+	path, err := pathmodel.Parse(value)
+	if err != nil {
+		return err
+	}
+	if path.String() != value {
+		return fmt.Errorf("stored path %q must preserve its exact Git spelling", value)
+	}
+	return nil
+}

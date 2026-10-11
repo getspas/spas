@@ -18,11 +18,13 @@ func (a App) validateUnlinkOwnership(ctx context.Context, repository publicgit.R
 	if err != nil {
 		return err
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
+		return err
+	}
+	conflicts, err := collision.DetectNative(repository.Root, tracked, paths)
 	if err != nil {
 		return err
 	}
-	conflicts := collision.Detect(tracked, paths, ignoreCase)
 	if len(conflicts) > 0 {
 		messages := make([]string, 0, len(conflicts))
 		for _, conflict := range conflicts {

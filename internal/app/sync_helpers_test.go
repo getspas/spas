@@ -32,7 +32,6 @@ func TestVerifyActiveMergeMaterializationSnapshotsRejectsNewBaseline(t *testing.
 		map[string]fileSnapshot{
 			path.String(): {Digest: [32]byte{2}, Existed: true},
 		},
-		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "changed before the final") {
 		t.Fatalf("verifyActiveMergeMaterializationSnapshots() error = %v, want changed-baseline rejection", err)
@@ -58,6 +57,7 @@ func TestResolveStoredOverridesFindsCaseOnlyPrivateReplacement(t *testing.T) {
 
 	public, private, replacements, err := resolveStoredOverrides(
 		[]string{"docs/architecture.md"},
+		map[string]string{"docs/architecture.md": "docs/ARCHITECTURE.md"},
 		[]pathmodel.Path{mustPath(t, "docs/ARCHITECTURE.md")},
 	)
 	if err != nil {
@@ -82,21 +82,21 @@ func TestResolveStoredOverridesRejectsMissingOrAmbiguousReplacement(t *testing.T
 		private []pathmodel.Path
 		want    string
 	}{
-		{name: "missing", want: "found 0"},
+		{name: "missing", want: "missing"},
 		{
 			name: "ambiguous",
 			private: []pathmodel.Path{
 				mustPath(t, "docs/ARCHITECTURE.md"),
 				mustPath(t, "docs/Architecture.md"),
 			},
-			want: "found 2",
+			want: "missing",
 		},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, _, _, err := resolveStoredOverrides([]string{"docs/architecture.md"}, test.private)
+			_, _, _, err := resolveStoredOverrides([]string{"docs/architecture.md"}, map[string]string{"docs/architecture.md": "docs/absent.md"}, test.private)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("resolveStoredOverrides() error = %v, want %q", err, test.want)
 			}
@@ -139,37 +139,43 @@ func TestCaseRenamePreRemovals(t *testing.T) {
 	oldPath := mustPath(t, "docs/Foo.md")
 	newPath := mustPath(t, "docs/foo.md")
 
-	removals, targets, err := caseRenamePreRemovals(
+	removals, targets, err := nativeRenamePreRemovals(
 		[]pathmodel.Path{newPath},
 		[]string{oldPath.String()},
 		map[string]struct{}{},
-		true,
+		t.TempDir(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removals) != 1 || removals[0] != oldPath {
-		t.Fatalf("caseRenamePreRemovals() removals = %#v, want %q", removals, oldPath)
+	if len(removals) == 0 {
+		t.Skip("filesystem distinguishes case spellings")
 	}
-	if _, found := targets[pathmodel.Canonical(newPath, true)]; !found {
-		t.Fatal("caseRenamePreRemovals() did not mark final canonical destination")
+	if len(removals) != 1 || removals[0] != oldPath {
+		t.Fatalf("nativeRenamePreRemovals() removals = %#v, want %q", removals, oldPath)
+	}
+	if _, found := targets[newPath.String()]; !found {
+		t.Fatal("nativeRenamePreRemovals() did not mark final canonical destination")
 	}
 }
 
 func TestCaseRenamePreRemovalsDisabledOnCaseSensitiveFilesystem(t *testing.T) {
 	t.Parallel()
 
-	removals, targets, err := caseRenamePreRemovals(
+	removals, targets, err := nativeRenamePreRemovals(
 		[]pathmodel.Path{mustPath(t, "docs/foo.md")},
 		[]string{"docs/Foo.md"},
 		map[string]struct{}{},
-		false,
+		t.TempDir(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(removals) != 0 {
+		t.Skip("filesystem aliases case spellings")
+	}
 	if len(removals) != 0 || len(targets) != 0 {
-		t.Fatalf("caseRenamePreRemovals() = %#v, %#v, want no pre-removal", removals, targets)
+		t.Fatalf("nativeRenamePreRemovals() = %#v, %#v, want no pre-removal", removals, targets)
 	}
 }
 
@@ -177,16 +183,16 @@ func TestCaseRenamePreRemovalsHonorsSkippedFinalPath(t *testing.T) {
 	t.Parallel()
 
 	newPath := mustPath(t, "docs/foo.md")
-	removals, _, err := caseRenamePreRemovals(
+	removals, _, err := nativeRenamePreRemovals(
 		[]pathmodel.Path{newPath},
 		[]string{"docs/Foo.md"},
 		map[string]struct{}{newPath.String(): {}},
-		true,
+		t.TempDir(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(removals) != 0 {
-		t.Fatalf("caseRenamePreRemovals() removals = %#v, want none for skipped final path", removals)
+		t.Fatalf("nativeRenamePreRemovals() removals = %#v, want none for skipped final path", removals)
 	}
 }

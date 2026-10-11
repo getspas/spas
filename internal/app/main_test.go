@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -157,6 +158,18 @@ func runGitProxy() int {
 			return exitErr.ExitCode()
 		}
 		return 127
+	}
+	if mode == "track-public-after-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
+		path := os.Getenv("SPAS_APP_EDIT_PATH")
+		if err := os.WriteFile(path, []byte("project\n"), 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		track := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), "-C", os.Getenv("SPAS_APP_WORKSPACE"), "add", "-f", "--", filepath.Base(path))
+		if output, err := track.CombinedOutput(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%v: %s", err, output)
+			return 1
+		}
 	}
 	if (mode == "fail-write-tree-and-recreate-marker" || mode == "recreate-marker-after-abort") &&
 		containsArgument(args, "merge") &&

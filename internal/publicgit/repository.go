@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/pathmodel"
+	"golang.org/x/text/unicode/norm"
 )
 
 type Repository struct {
@@ -223,10 +225,38 @@ func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (
 	if len(paths) == 0 {
 		return make(map[pathmodel.Path]bool), nil
 	}
+	queries := make(map[pathmodel.Path][]pathmodel.Path, len(paths))
+	all := make(map[pathmodel.Path]bool)
+	observer := pathmodel.NewObserver(r.Root)
+	for _, path := range paths {
+		observed, err := observer.Destination(path)
+		if err != nil {
+			return nil, fmt.Errorf("observe exclusion path %q: %w", path, err)
+		}
+		queries[path] = []pathmodel.Path{path, observed}
+		composed := pathmodel.Path(norm.NFC.String(observed.String()))
+		if composed != observed {
+			alias, err := observer.Destination(composed)
+			if err != nil {
+				return nil, err
+			}
+			if alias == observed {
+				queries[path] = append(queries[path], composed)
+			}
+		}
+		for _, query := range queries[path] {
+			all[query] = true
+		}
+	}
+	probePaths := make([]pathmodel.Path, 0, len(all))
+	for query := range all {
+		probePaths = append(probePaths, query)
+	}
+	sort.Slice(probePaths, func(i, j int) bool { return probePaths[i] < probePaths[j] })
 	result, err := r.Git.RunInput(
 		ctx,
 		r.Root,
-		pathspecInput(paths),
+		pathspecInput(probePaths),
 		"check-ignore",
 		"--no-index",
 		"--stdin",
@@ -239,7 +269,24 @@ func (r Repository) ExcludedPaths(ctx context.Context, paths []pathmodel.Path) (
 			return nil, fmt.Errorf("check public exclusions: %w", err)
 		}
 	}
-	return parseCheckIgnoreOutput(result.Stdout)
+	ignored, err := parseCheckIgnoreOutput(result.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	excluded := make(map[pathmodel.Path]bool, len(paths))
+	for path, spellings := range queries {
+		included := true
+		for _, spelling := range spellings {
+			if !ignored[spelling] {
+				included = false
+				break
+			}
+		}
+		if included {
+			excluded[path] = true
+		}
+	}
+	return excluded, nil
 }
 
 func (r Repository) UnexcludedPaths(ctx context.Context, paths []pathmodel.Path) ([]pathmodel.Path, error) {

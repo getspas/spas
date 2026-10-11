@@ -1118,7 +1118,7 @@ func TestSyncRechecksCasePolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
-	if !strings.Contains(output.String(), "core.ignoreCase") || !strings.Contains(output.String(), "case-insensitive") {
+	if !strings.Contains(output.String(), "core.ignoreCase") || !strings.Contains(output.String(), "native filesystem") {
 		t.Fatalf("Sync() output has no case-policy warning:\n%s", output.String())
 	}
 }

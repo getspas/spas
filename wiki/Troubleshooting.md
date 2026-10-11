@@ -71,7 +71,7 @@ spas doctor --json
 ### `unsupported_path` (Exit Code 11)
 
 - **Cause:** An asset is a symlink, directory junction, submodule, a reserved Git/SPAS path, or cannot be represented in SPAS state/exclusion rules (invalid UTF-8, Unicode `Cf` characters, or control codes). Windows additionally rejects its reserved filename syntax; native Git/filesystem operations may reject other names or lengths on the destination.
-- **Fix:** Use standard regular files and inspect the failing path and operation in the error. Punctuation and device-name spellings valid on the current host are accepted; asset sets need not work on every other platform. NFC/case identity and conservative length restrictions still apply.
+- **Fix:** Use standard regular files and inspect the failing path and operation in the error. Punctuation and device-name spellings valid on the current host are accepted; asset sets need not work on every other platform. Distinct case/Unicode names are supported when both destinations distinguish them; resolve any named native alias collision before retrying. Conservative length restrictions still apply.
 
 ---
 

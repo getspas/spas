@@ -71,7 +71,7 @@ func TestExclusionCLIWarningStreams(t *testing.T) {
 			if jsonMode {
 				decoder := json.NewDecoder(bytes.NewReader(stderr))
 				var warning map[string]json.RawMessage
-				if err := decoder.Decode(&warning); err != nil || len(warning) != 2 || string(warning["schemaVersion"]) != "2" {
+				if err := decoder.Decode(&warning); err != nil || len(warning) != 2 || string(warning["schemaVersion"]) != "3" {
 					t.Fatalf("warning %s: %v", stderr, err)
 				}
 				var fields map[string]string
@@ -85,7 +85,7 @@ func TestExclusionCLIWarningStreams(t *testing.T) {
 							Code string `json:"code"`
 						} `json:"error"`
 					}
-					if err := decoder.Decode(&envelope); err != nil || envelope.SchemaVersion != 2 || envelope.Error.Code != "exclusion_validation_failed" || len(out) != 0 {
+					if err := decoder.Decode(&envelope); err != nil || envelope.SchemaVersion != 3 || envelope.Error.Code != "exclusion_validation_failed" || len(out) != 0 {
 						t.Fatalf("error %s: %v", stderr, err)
 					}
 				} else if !json.Valid(out) {

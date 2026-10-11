@@ -36,9 +36,11 @@ func validActiveMerge(conflictPaths, recoveryPaths, overridePaths []string) Acti
 	}
 	materializationPaths := append([]string{}, paths...)
 	materializationSnapshots := append([]WorkspaceSnapshot{}, snapshots...)
+	replacements := make(map[string]string, len(overridePaths))
 	statuses := make([]OverrideStatus, 0, len(overridePaths))
 	for _, path := range overridePaths {
 		statuses = append(statuses, OverrideStatus{Path: path})
+		replacements[path] = path
 	}
 	return ActiveMerge{
 		ConflictFilesReady:       true,
@@ -51,6 +53,7 @@ func validActiveMerge(conflictPaths, recoveryPaths, overridePaths []string) Acti
 		ConflictPaths:            conflictPaths,
 		RecoveryPaths:            recoveryPaths,
 		OverridePaths:            overridePaths,
+		OverrideReplacements:     replacements,
 	}
 }
 
@@ -891,13 +894,14 @@ func TestSaveLoadPreservesMaterializationWorkspaceContract(t *testing.T) {
 		store,
 	)
 	state.Materializing = &Materialization{
-		Phase:             MaterializationPushed,
-		ResultPrivateHead: strings.Repeat("a", 40),
-		PreviousPaths:     []string{".env"},
-		FinalPaths:        []string{".env"},
-		ExcludedPaths:     []string{".env"},
-		OverridePaths:     []string{".env"},
-		RecoveryPaths:     []string{".env"},
+		Phase:                MaterializationPushed,
+		ResultPrivateHead:    strings.Repeat("a", 40),
+		PreviousPaths:        []string{".env"},
+		FinalPaths:           []string{".env"},
+		ExcludedPaths:        []string{".env"},
+		OverridePaths:        []string{".env"},
+		OverrideReplacements: map[string]string{".env": ".env"},
+		RecoveryPaths:        []string{".env"},
 		WorkspaceSnapshots: []WorkspaceSnapshot{{
 			Path:       ".env",
 			Digest:     strings.Repeat("b", 64),
@@ -977,13 +981,14 @@ func TestSaveRejectsInvalidMaterializationWorkspaceContract(t *testing.T) {
 				store,
 			)
 			state.Materializing = &Materialization{
-				Phase:             MaterializationPushed,
-				ResultPrivateHead: strings.Repeat("a", 40),
-				PreviousPaths:     []string{".env"},
-				FinalPaths:        []string{".env"},
-				ExcludedPaths:     []string{".env"},
-				OverridePaths:     []string{".env"},
-				RecoveryPaths:     []string{".env"},
+				Phase:                MaterializationPushed,
+				ResultPrivateHead:    strings.Repeat("a", 40),
+				PreviousPaths:        []string{".env"},
+				FinalPaths:           []string{".env"},
+				ExcludedPaths:        []string{".env"},
+				OverridePaths:        []string{".env"},
+				OverrideReplacements: map[string]string{".env": ".env"},
+				RecoveryPaths:        []string{".env"},
 				WorkspaceSnapshots: []WorkspaceSnapshot{{
 					Path:    ".env",
 					Digest:  strings.Repeat("b", 64),

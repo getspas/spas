@@ -61,7 +61,7 @@ func TestLinkPublicRepositoryJSONWarningSurvivesLaterFailure(t *testing.T) {
 		if err := json.Unmarshal(warnings.Bytes(), &record); err != nil {
 			t.Fatalf("warning is not one JSON object: %v, %q", err, warnings.String())
 		}
-		if record.SchemaVersion != 2 || record.Warning.Code != "public_repository" || !strings.Contains(record.Warning.Message, "publicly readable") {
+		if record.SchemaVersion != 3 || record.Warning.Code != "public_repository" || !strings.Contains(record.Warning.Message, "publicly readable") {
 			t.Fatalf("warning record = %+v", record)
 		}
 		if wantFailure {
@@ -70,7 +70,7 @@ func TestLinkPublicRepositoryJSONWarningSurvivesLaterFailure(t *testing.T) {
 			}
 		} else {
 			var result map[string]any
-			if err := json.Unmarshal(out.Bytes(), &result); err != nil || result["networkAccess"] != true || result["schemaVersion"] != float64(2) {
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil || result["networkAccess"] != true || result["schemaVersion"] != float64(3) {
 				t.Fatalf("result = %q, decode error %v", out.String(), err)
 			}
 		}

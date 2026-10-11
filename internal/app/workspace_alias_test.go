@@ -57,21 +57,10 @@ func TestExpandPathsThroughAliasPreservesUnicodeValidation(t *testing.T) {
 	if err := os.WriteFile(nfc, []byte("normalized"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rawInfo, err := os.Stat(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nfcInfo, err := os.Stat(nfc)
-	if err != nil {
-		t.Fatal(err)
-	}
 	paths, err := (App{PathBase: alias}).expandPaths(workspace, workspace,
 		[]string{filepath.Join(alias, "cafe\u0301.env")})
-	if os.SameFile(rawInfo, nfcInfo) {
-		if err != nil || len(paths) != 1 || paths[0] != "caf\u00e9.env" {
-			t.Fatalf("expandPaths(genuine Unicode alias) = %q, %v", paths, err)
-		}
-	} else if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-		t.Fatalf("expandPaths(distinct Unicode entries) = %q, %v; want KindUnsupportedPath", paths, err)
+	if err != nil || len(paths) != 1 || paths[0].String() != nativeEntrySpelling(t, workspace, "cafe\u0301.env") {
+		t.Fatalf("expandPaths() changed native identity: %q, %v", paths, err)
 	}
+
 }

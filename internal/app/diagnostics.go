@@ -188,18 +188,11 @@ func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repositor
 	if len(values) == 0 {
 		return known, nil
 	}
-	// Git's configured policy (default false) is readable without the workspace
-	// write probe used by mutation collision checks. Existing aliases can also
-	// establish their identity directly when that policy is case-sensitive.
-	ignoreCase, _, err := repository.EffectiveIgnoreCase(ctx)
-	if err != nil {
-		return nil, err
-	}
 	exact := stringSet(known)
 	folded := make(map[string][]pathmodel.Path, len(exact))
 	for value := range exact {
 		path := pathmodel.Path(value)
-		key := pathmodel.Canonical(path, true)
+		key := pathmodel.Folded(path)
 		folded[key] = append(folded[key], path)
 	}
 	selected := []string{}
@@ -211,8 +204,8 @@ func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repositor
 		}
 		stored := requested
 		if _, matches := exact[requested.String()]; !matches {
-			candidates := folded[pathmodel.Canonical(requested, true)]
-			if !ignoreCase && len(candidates) > 0 {
+			candidates := folded[pathmodel.Folded(requested)]
+			if len(candidates) > 0 {
 				candidates, err = existingDiffAliases(repository.Root, observed, candidates)
 				if err != nil {
 					return nil, err
@@ -239,7 +232,8 @@ func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repositor
 }
 
 func existingDiffAliases(root, observed string, candidates []pathmodel.Path) ([]pathmodel.Path, error) {
-	selected, err := os.Lstat(observed)
+	observer := pathmodel.NewObserver(root)
+	selected, err := observer.Path(observed)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -248,16 +242,16 @@ func existingDiffAliases(root, observed string, candidates []pathmodel.Path) ([]
 	}
 	var matches []pathmodel.Path
 	for _, candidate := range candidates {
-		info, err := os.Lstat(candidate.OSPath(root))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		entry, err := observer.Destination(candidate)
 		if err != nil {
 			return nil, err
 		}
-		if os.SameFile(selected, info) {
+		if selected == entry {
 			matches = append(matches, candidate)
 		}
+	}
+	if len(matches) == 0 {
+		return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("selected path %q is a distinct directory entry; select an exact managed spelling", observed))
 	}
 	return matches, nil
 }
@@ -367,9 +361,9 @@ func (a App) Doctor(ctx context.Context) error {
 	} else {
 		filesystemCase = probedCase
 		if present && configCase != filesystemCase {
-			add("case-policy", "warning", fmt.Sprintf("core.ignoreCase=%t disagrees with filesystem=%t; sync uses case-insensitive checks", configCase, filesystemCase))
+			add("case-policy", "warning", fmt.Sprintf("core.ignoreCase=%t disagrees with filesystem=%t; sync checks native destination aliases", configCase, filesystemCase))
 		} else {
-			add("case-policy", "ok", fmt.Sprintf("case-insensitive=%t", configCase || filesystemCase))
+			add("case-policy", "ok", fmt.Sprintf("case-insensitive=%t", filesystemCase))
 		}
 	}
 
@@ -485,8 +479,10 @@ func (a App) Doctor(ctx context.Context) error {
 	} else if !casePolicyKnown {
 		add("path-ownership", "error", "case policy is unavailable")
 	} else {
-		ignoreCase := configCase || filesystemCase
-		conflicts := collision.Detect(publicPaths, privatePaths, ignoreCase)
+		conflicts, err := collision.DetectNative(repository.Root, publicPaths, privatePaths)
+		if err != nil {
+			return err
+		}
 		if len(conflicts) > 0 {
 			add("path-ownership", "error", fmt.Sprintf("%d public/private path conflict(s)", len(conflicts)))
 		} else {
@@ -513,7 +509,7 @@ func (a App) Doctor(ctx context.Context) error {
 
 	if excludePath, excludeErr := repository.InfoExcludePath(ctx); excludeErr != nil {
 		add("exclude-block-integrity", "error", excludeErr.Error())
-	} else if plan, planErr := exclude.Build(excludePath, state.Exclude.BlockID, managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)); planErr != nil {
+	} else if plan, planErr := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)); planErr != nil {
 		add("exclude-block-integrity", "error", planErr.Error())
 	} else if plan.Changed {
 		add("exclude-block-integrity", "warning", "the SPAS local-exclude block does not match the managed file set; the next mutating command rewrites it")

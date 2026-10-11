@@ -139,8 +139,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			return err
 		}
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
 	unmerged, err := repository.UnmergedPaths(ctx)
@@ -168,7 +167,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	}
 	// Complete a pushed private result before reading workspace bytes as new
 	// local edits.
-	if err := a.resumeMaterialization(ctx, repository, &state, private, ignoreCase); err != nil {
+	if err := a.resumeMaterialization(ctx, repository, &state, private); err != nil {
 		return err
 	}
 
@@ -238,13 +237,13 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	}
 	pendingAdds := stringsToPaths(state.PendingAdds)
 	localCandidate := unionPaths(localPrivatePaths, pendingAdds)
-	// Portability is judged per actual revision, not across the union of the
+	// Native equivalence is checked per actual revision, not across the union of the
 	// old and fetched trees. The union may legitimately contain both spellings
 	// of a case-only rename even though no Git revision contains both. The current implementation
 	// still rejects file/directory transitions between revisions because they
 	// require a different ordered materialization and recovery protocol.
-	if err := collision.PrivateRevisionCompatibility(localCandidate, remotePrivatePaths, true); err != nil {
-		return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+	if err := validateAssetDestinations(repository.Root, private.Path, localCandidate, remotePrivatePaths); err != nil {
+		return err
 	}
 	candidatePrivate := unionPaths(localCandidate, remotePrivatePaths)
 	if err := validateProspectivePrivateTreeSize(candidatePrivate); err != nil {
@@ -258,7 +257,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 	}
-	// groupByCanonical supports the case-only override's ambiguity check.
+	// Native destination keys support the ownership override ambiguity check.
 
 	publicPaths, err := repository.TrackedPaths(ctx)
 	if err != nil {
@@ -267,9 +266,16 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	// Only paths already present in the private repository (locally or on the
 	// fetched remote) can replace a public path during an ownership override.
 	privateReplacements := stringSet(pathsToStrings(unionPaths(localPrivatePaths, remotePrivatePaths)))
-	publicByCanonical := groupByCanonical(publicPaths, ignoreCase)
-	privateByCanonical := groupByCanonical(candidatePrivate, ignoreCase)
-	conflicts := collision.Detect(publicPaths, candidatePrivate, ignoreCase)
+	nativeKeys, err := pathmodel.ComparisonKeys(repository.Root, candidatePrivate, publicPaths)
+	if err != nil {
+		return err
+	}
+	publicByDestination := groupByDestination(publicPaths, nativeKeys)
+	privateByDestination := groupByDestination(candidatePrivate, nativeKeys)
+	conflicts, err := collision.DetectNative(repository.Root, publicPaths, candidatePrivate)
+	if err != nil {
+		return err
+	}
 	skipped := make(map[string]struct{})
 	overridePublic := make(map[string]pathmodel.Path)
 	// caseOverridePrivate holds the private spelling of an approved case-only
@@ -300,12 +306,12 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 				}
 				overridePublic[conflict.Public.String()] = conflict.Public
 				overrideReplacement[conflict.Public.String()] = conflict.Public.String()
-			case collision.CaseInsensitive:
+			case collision.NativeAlias:
 				// A case-only override is automatic only when exactly one
 				// public and one private spelling collapse to the same
 				// normalized form.
-				canonical := pathmodel.Canonical(conflict.Private, ignoreCase)
-				if len(publicByCanonical[canonical]) != 1 || len(privateByCanonical[canonical]) != 1 {
+				canonical := nativeKeys[conflict.Private]
+				if len(publicByDestination[canonical]) != 1 || len(privateByDestination[canonical]) != 1 {
 					return spaserr.Wrap(spaserr.KindPathConflict, fmt.Errorf("%s; multiple paths collapse to one normalized form, so automatic override is not possible — rename them manually", conflict.Error()))
 				}
 				if _, has := privateReplacements[conflict.Private.String()]; !has {
@@ -418,7 +424,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	excludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, excludeManaged)
+	excludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, excludeManaged)
 	if err != nil {
 		return err
 	}
@@ -522,14 +528,28 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			rollbackPaths = append(rollbackPaths, change.Path)
 		}
 	}
+	rollbackRevision := headBefore
 	rollbackNeeded := len(changes) > 0
+	createdHead := ""
 	defer func() {
 		if !rollbackNeeded {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
-		if rollbackErr := private.RollbackChanges(cleanupCtx, headBefore, rollbackPaths); rollbackErr != nil {
+		if rollbackRevision == "" && createdHead != "" {
+			createdPaths, rollbackErr := private.TreePaths(cleanupCtx, createdHead)
+			if rollbackErr != nil {
+				returnErr = errors.Join(returnErr, rollbackErr)
+				return
+			}
+			rollbackPaths = unionPaths(rollbackPaths, createdPaths)
+			if rollbackErr := private.RestoreUnbornBranch(cleanupCtx, state.Private.Branch, createdHead); rollbackErr != nil {
+				returnErr = errors.Join(returnErr, rollbackErr)
+				return
+			}
+		}
+		if rollbackErr := private.RollbackChanges(cleanupCtx, rollbackRevision, rollbackPaths); rollbackErr != nil {
 			if returnErr == nil {
 				returnErr = rollbackErr
 			} else {
@@ -564,7 +584,10 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			return err
 		}
 	}
-	rollbackNeeded = false
+	createdHead, err = private.Head(ctx)
+	if err != nil {
+		return err
+	}
 
 	var finalPaths []pathmodel.Path
 	var finalExclude []pathmodel.Path
@@ -590,6 +613,21 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			if expectedMergeHead == "" {
 				return fmt.Errorf("private remote branch %q no longer names a commit", state.Private.Branch)
 			}
+			tree, err := private.MergeTree(ctx, preMergeHead, expectedMergeHead)
+			if err != nil {
+				return err
+			}
+			if err := private.ValidateTree(ctx, tree); err != nil {
+				return err
+			}
+			prospectivePaths, err := private.TreePaths(ctx, tree)
+			if err != nil {
+				return err
+			}
+			if err := validateAssetDestinations(repository.Root, private.Path, stringsToPaths(state.ManagedPaths), prospectivePaths); err != nil {
+				return err
+			}
+			rollbackNeeded = false
 			if _, err := private.MergeRemote(ctx, state.Private.Branch); err != nil {
 				mergeInProgress, mergeProbeErr := private.MergeInProgress()
 				if mergeProbeErr != nil {
@@ -643,7 +681,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 						return a.abortFailedMerge(ctx, private, &state, primary)
 					}
 				}
-				if err := revalidatePublicOwnership(ctx, repository, unmerged, nil, nil, ignoreCase); err != nil {
+				if err := revalidatePublicOwnership(ctx, repository, unmerged, nil, nil); err != nil {
 					return a.abortFailedMerge(ctx, private, &state, err)
 				}
 				recoveryPaths := unionPaths(
@@ -694,6 +732,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 					SkippedPaths:             pathsToStrings(skippedPaths),
 					DeferredPaths:            sortedSet(deferred),
 					OverridePaths:            pathsToStrings(mapPathValues(overridePublic)),
+					OverrideReplacements:     overrideReplacement,
 					RecoveryPaths:            pathsToStrings(recoveryPaths),
 					RemainingPendingAdds:     append([]string{}, finalPendingAdds...),
 					RemainingPendingRemoves:  append([]linkstate.PendingRemoval{}, finalPendingRemoves...),
@@ -724,6 +763,8 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			}
 		}
 
+		rollbackNeeded = true
+
 		resultHead, err := private.Head(ctx)
 		if err != nil {
 			return err
@@ -731,17 +772,20 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if resultHead == "" {
 			return fmt.Errorf("private repository is empty and no local files were approved for its initial commit")
 		}
+		if rollbackRevision == "" {
+			createdHead = resultHead
+		}
 		if err := private.ValidateTree(ctx, resultHead); err != nil {
-			if preMergeHead != "" && resultHead != preMergeHead {
-				return errors.Join(err, private.ResetHard(ctx, preMergeHead))
-			}
 			return err
 		}
 		finalPaths, err = private.TrackedPaths(ctx)
 		if err != nil {
 			return err
 		}
-		if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overridePublic, ignoreCase); err != nil {
+		if err := validateAssetDestinations(repository.Root, private.Path, stringsToPaths(state.ManagedPaths), finalPaths); err != nil {
+			return err
+		}
+		if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overridePublic); err != nil {
 			return err
 		}
 		finalSet := stringSet(pathsToStrings(finalPaths))
@@ -771,6 +815,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			skipped,
 			deferred,
 			overridePublic,
+			overrideReplacement,
 			recoveryPaths,
 			mergeFileSnapshots(snapshots, overrideSnapshots),
 			finalPendingAdds,
@@ -783,6 +828,8 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if err := a.Store.Save(state); err != nil {
 			return fmt.Errorf("save pending private push state: %w", err)
 		}
+		rollbackRevision = resultHead
+		rollbackNeeded = false
 		if err := private.VerifyOrigin(ctx, remoteURL); err != nil {
 			return err
 		}
@@ -797,9 +844,9 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if attempt < maxPushAttempts && privategit.IsNonFastForward(err) {
 			// The remote advanced between merge and push. Fetch, validate,
 			// merge, and push again a bounded number of times.
-			state.Materializing = nil
+			state.Materializing.Phase = linkstate.MaterializationRemoteAdvanced
 			if saveErr := a.Store.Save(state); saveErr != nil {
-				return fmt.Errorf("clear superseded pending push state: %w", saveErr)
+				return fmt.Errorf("save remote-advanced pending push state: %w", saveErr)
 			}
 			if err := private.Fetch(ctx, state.Private.Branch); err != nil {
 				return err
@@ -816,7 +863,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 
 	// The exclude block is written and proven effective before any private
 	// content reaches the public working tree.
-	finalExcludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, finalExclude)
+	finalExcludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, finalExclude)
 	if err != nil {
 		return err
 	}
@@ -842,7 +889,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	); err != nil {
 		return err
 	}
-	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overridePublic, ignoreCase); err != nil {
+	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overridePublic); err != nil {
 		return err
 	}
 	trackedOverrides, err := currentlyTrackedOverrides(ctx, repository, overridePublic)
@@ -860,7 +907,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		overrideSnapshots,
 		overrideReplacement,
 	)
-	if err := materializeFinal(repository.Root, private.Path, finalPaths, state.ManagedPaths, materializeSkip, overrideReplacement, materializationSnapshots, ignoreCase); err != nil {
+	if err := materializeFinal(repository.Root, private.Path, finalPaths, state.ManagedPaths, materializeSkip, overrideReplacement, materializationSnapshots); err != nil {
 		return err
 	}
 	// Re-verify after materialization: the materialized tree itself must not
@@ -1149,13 +1196,6 @@ func (a App) syncDryRun(
 			return err
 		}
 	}
-	ignoreCase, present, err := repository.EffectiveIgnoreCase(ctx)
-	if err != nil {
-		return err
-	}
-	if !present {
-		ignoreCase = true
-	}
 	localPrivatePaths, err := private.TrackedPaths(ctx)
 	if err != nil {
 		return err
@@ -1165,7 +1205,10 @@ func (a App) syncDryRun(
 		return err
 	}
 	candidatePrivate := unionPaths(localPrivatePaths, stringsToPaths(state.PendingAdds))
-	conflicts := collision.Detect(publicPaths, candidatePrivate, ignoreCase)
+	conflicts, err := collision.DetectNative(repository.Root, publicPaths, candidatePrivate)
+	if err != nil {
+		return err
+	}
 	pendingRemoves := make(map[string]linkstate.PendingRemoval, len(state.PendingRemoves))
 	for _, removal := range state.PendingRemoves {
 		pendingRemoves[removal.Path] = removal
@@ -1187,7 +1230,7 @@ func (a App) syncDryRun(
 	if err != nil {
 		return err
 	}
-	excludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, candidatePrivate)
+	excludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, candidatePrivate)
 	if err != nil {
 		return err
 	}
@@ -1271,7 +1314,6 @@ func (a App) resumeMaterialization(
 	repository publicgit.Repository,
 	state *linkstate.State,
 	private privategit.Repository,
-	ignoreCase bool,
 ) error {
 	marker := state.Materializing
 	if marker == nil {
@@ -1346,6 +1388,9 @@ func (a App) resumeMaterialization(
 	if err := private.ValidateTree(ctx, head); err != nil {
 		return fmt.Errorf("validate pending private result: %w", err)
 	}
+	if err := validateAssetDestinations(repository.Root, private.Path, stringsToPaths(marker.PreviousPaths), stringsToPaths(marker.FinalPaths)); err != nil {
+		return err
+	}
 	if marker.Phase == linkstate.MaterializationPushPending {
 		if err := private.Push(ctx, state.Private.Branch); err != nil {
 			if privategit.IsNonFastForward(err) {
@@ -1380,7 +1425,7 @@ func (a App) resumeMaterialization(
 		return err
 	}
 	overrides := stringSet(marker.OverridePaths)
-	_, _, overrideReplacement, err := resolveStoredOverrides(marker.OverridePaths, finalPaths)
+	_, _, overrideReplacement, err := resolveStoredOverrides(marker.OverridePaths, marker.OverrideReplacements, finalPaths)
 	if err != nil {
 		return err
 	}
@@ -1388,7 +1433,11 @@ func (a App) resumeMaterialization(
 	if err != nil {
 		return err
 	}
-	for _, conflict := range collision.Detect(publicPaths, finalPaths, ignoreCase) {
+	ownershipConflicts, ownershipConflictsErr := collision.DetectNative(repository.Root, publicPaths, finalPaths)
+	if ownershipConflictsErr != nil {
+		return ownershipConflictsErr
+	}
+	for _, conflict := range ownershipConflicts {
 		if _, blocked := skipped[conflict.Private.String()]; blocked {
 			continue
 		}
@@ -1412,7 +1461,7 @@ func (a App) resumeMaterialization(
 		stringsToPaths(marker.PreviousPaths),
 		stringsToPaths(marker.ExcludedPaths),
 	)
-	recoveryPlan, err := exclude.Build(excludePath, state.Exclude.BlockID, recoveryExclude)
+	recoveryPlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, recoveryExclude)
 	if err != nil {
 		return err
 	}
@@ -1494,7 +1543,7 @@ func (a App) resumeMaterialization(
 			fmt.Errorf("interrupted recovery path %q still differs from the pushed private replacement; move or remove it before sync can resume", recoveryPath),
 		)
 	}
-	caseRenameOld, caseRenameTargets, err := caseRenamePreRemovals(finalPaths, marker.PreviousPaths, materializeSkip, ignoreCase)
+	caseRenameOld, caseRenameTargets, err := nativeRenamePreRemovals(finalPaths, marker.PreviousPaths, materializeSkip, repository.Root)
 	if err != nil {
 		return err
 	}
@@ -1506,15 +1555,19 @@ func (a App) resumeMaterialization(
 		if err != nil {
 			return err
 		}
-		caseRenameTargets[pathmodel.Canonical(privatePath, ignoreCase)] = struct{}{}
+		caseRenameTargets[privatePath.String()] = struct{}{}
 	}
 	caseRenameSet := stringSet(pathsToStrings(caseRenameOld))
-	finalByCanonical := make(map[string]pathmodel.Path, len(finalPaths))
+	finalKeys, err := pathmodel.DestinationKeys(repository.Root, unionPaths(finalPaths, stringsToPaths(marker.PreviousPaths)))
+	if err != nil {
+		return err
+	}
+	finalByDestination := make(map[string]pathmodel.Path, len(finalPaths))
 	for _, path := range finalPaths {
 		if _, blocked := materializeSkip[path.String()]; blocked {
 			continue
 		}
-		finalByCanonical[pathmodel.Canonical(path, ignoreCase)] = path
+		finalByDestination[finalKeys[path]] = path
 	}
 	for _, value := range marker.PreviousPaths {
 		if _, remains := finalSet[value]; remains {
@@ -1531,7 +1584,7 @@ func (a App) resumeMaterialization(
 			return err
 		}
 		if _, caseRename := caseRenameSet[value]; caseRename {
-			finalPath := finalByCanonical[pathmodel.Canonical(path, ignoreCase)]
+			finalPath := finalByDestination[finalKeys[path]]
 			equal, compareErr := filesync.Equal(workspacePath, finalPath.OSPath(private.Path))
 			if compareErr != nil {
 				return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("inspect interrupted case-only rename for %q: %w", path, compareErr))
@@ -1567,7 +1620,7 @@ func (a App) resumeMaterialization(
 				return fmt.Errorf("workspace snapshot for interrupted materialization path %q is missing", path)
 			}
 			_, approvedRecoveryRemoval := recoverySet[path.String()]
-			_, approvedCaseRenameRemoval := caseRenameTargets[pathmodel.Canonical(path, ignoreCase)]
+			_, approvedCaseRenameRemoval := caseRenameTargets[path.String()]
 			if snapshot.Existed && !approvedRecoveryRemoval && !approvedCaseRenameRemoval {
 				return spaserr.Wrap(
 					spaserr.KindUnsafeGitState,
@@ -1614,7 +1667,7 @@ func (a App) resumeMaterialization(
 	}
 
 	finalExclude := stringsToPaths(marker.ExcludedPaths)
-	finalPlan, err := exclude.Build(excludePath, state.Exclude.BlockID, finalExclude)
+	finalPlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, finalExclude)
 	if err != nil {
 		return err
 	}
@@ -1734,6 +1787,7 @@ func newMaterialization(
 	skipped map[string]struct{},
 	deferred map[string]struct{},
 	overrides map[string]pathmodel.Path,
+	replacements map[string]string,
 	recoveryPaths []pathmodel.Path,
 	snapshots map[string]fileSnapshot,
 	pendingAdds []string,
@@ -1756,6 +1810,7 @@ func newMaterialization(
 		SkippedPaths:            sortedSet(skipped),
 		DeferredPaths:           sortedSet(deferred),
 		OverridePaths:           pathsToStrings(mapPathValues(overrides)),
+		OverrideReplacements:    replacements,
 		RecoveryPaths:           pathsToStrings(recoveryPaths),
 		WorkspaceSnapshots:      persistedSnapshots,
 		RemainingPendingAdds:    append([]string{}, pendingAdds...),
@@ -1848,19 +1903,11 @@ func verifyActiveMergeRecoveryPaths(
 	publicRoot string,
 	active *linkstate.ActiveMerge,
 	snapshots map[string]fileSnapshot,
-	ignoreCase bool,
 ) error {
 	conflicts := stringSet(active.ConflictPaths)
 	overrides := stringSet(active.OverridePaths)
-	overrideCanonical := make(map[string]struct{}, len(overrides))
-	if ignoreCase {
-		for value := range overrides {
-			path, err := pathmodel.Parse(value)
-			if err != nil {
-				return err
-			}
-			overrideCanonical[pathmodel.Canonical(path, true)] = struct{}{}
-		}
+	for _, replacement := range active.OverrideReplacements {
+		overrides[replacement] = struct{}{}
 	}
 	for _, value := range active.RecoveryPaths {
 		if _, conflict := conflicts[value]; conflict {
@@ -1868,15 +1915,6 @@ func verifyActiveMergeRecoveryPaths(
 		}
 		if _, publicOverride := overrides[value]; publicOverride {
 			continue
-		}
-		if ignoreCase {
-			path, err := pathmodel.Parse(value)
-			if err != nil {
-				return err
-			}
-			if _, publicOverride := overrideCanonical[pathmodel.Canonical(path, true)]; publicOverride {
-				continue
-			}
 		}
 		snapshot, found := snapshots[value]
 		if !found {
@@ -1910,14 +1948,13 @@ func verifyActiveMergeMaterializationPaths(
 	publicRoot string,
 	active *linkstate.ActiveMerge,
 	paths []pathmodel.Path,
-	ignoreCase bool,
 ) error {
-	snapshots, editable, err := activeMergeMaterializationContract(active, ignoreCase)
+	snapshots, editable, err := activeMergeMaterializationContract(active)
 	if err != nil {
 		return err
 	}
 	for _, path := range paths {
-		if _, skip := editable[pathmodel.Canonical(path, ignoreCase)]; skip {
+		if _, skip := editable[path.String()]; skip {
 			continue
 		}
 		snapshot, found := snapshots[path.String()]
@@ -1945,14 +1982,13 @@ func verifyActiveMergeMaterializationSnapshots(
 	active *linkstate.ActiveMerge,
 	paths []pathmodel.Path,
 	current map[string]fileSnapshot,
-	ignoreCase bool,
 ) error {
-	expected, editable, err := activeMergeMaterializationContract(active, ignoreCase)
+	expected, editable, err := activeMergeMaterializationContract(active)
 	if err != nil {
 		return err
 	}
 	for _, path := range paths {
-		if _, skip := editable[pathmodel.Canonical(path, ignoreCase)]; skip {
+		if _, skip := editable[path.String()]; skip {
 			continue
 		}
 		approved, found := expected[path.String()]
@@ -1978,7 +2014,6 @@ func verifyActiveMergeMaterializationSnapshots(
 
 func activeMergeMaterializationContract(
 	active *linkstate.ActiveMerge,
-	ignoreCase bool,
 ) (map[string]fileSnapshot, map[string]struct{}, error) {
 	snapshots, err := decodeWorkspaceSnapshots(active.MaterializationSnapshots)
 	if err != nil {
@@ -1993,7 +2028,10 @@ func activeMergeMaterializationContract(
 		if err != nil {
 			return nil, nil, err
 		}
-		editable[pathmodel.Canonical(path, ignoreCase)] = struct{}{}
+		editable[path.String()] = struct{}{}
+	}
+	for _, replacement := range active.OverrideReplacements {
+		editable[replacement] = struct{}{}
 	}
 	return snapshots, editable, nil
 }
@@ -2042,7 +2080,10 @@ func decodeOverrideStatuses(persisted []linkstate.OverrideStatus) map[string][]b
 
 // verifyExclusion proves every path is effectively excluded from public Git.
 func (a App) verifyExclusion(ctx context.Context, repository publicgit.Repository, paths []pathmodel.Path) error {
-	verifyPaths := append([]pathmodel.Path{}, paths...)
+	verifyPaths, err := pathmodel.ExclusionPaths(repository.Root, paths)
+	if err != nil {
+		return err
+	}
 	if len(paths) > 0 {
 		tempProbe, err := pathmodel.Parse(filesync.ManagedTempProbe)
 		if err != nil {
@@ -2106,8 +2147,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err := a.requirePrimarySingleWorktree(ctx, repository); err != nil {
 		return err
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
 	if publicUnmerged, err := repository.UnmergedPaths(ctx); err != nil {
@@ -2129,7 +2169,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 			return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("a private result is awaiting recovery; run spas sync without --continue"))
 		}
 		if !mergeInProgress {
-			return a.resumeMaterialization(ctx, repository, state, private, ignoreCase)
+			return a.resumeMaterialization(ctx, repository, state, private)
 		}
 		pending, err := private.UnmergedPaths(ctx)
 		if err != nil {
@@ -2204,7 +2244,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 			if err := a.Store.Save(*state); err != nil {
 				return fmt.Errorf("save completed private merge result: %w", err)
 			}
-			return a.resumeMaterialization(ctx, repository, state, private, ignoreCase)
+			return a.resumeMaterialization(ctx, repository, state, private)
 		}
 		if phase == linkstate.MaterializationMergeStaged {
 			return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("private merge has unresolved paths after its resolution was marked staged; run spas sync --abort"))
@@ -2226,14 +2266,13 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err != nil {
 		return err
 	}
-	if err := verifyActiveMergeRecoveryPaths(repository.Root, state.ActiveMerge, activeSnapshots, ignoreCase); err != nil {
+	if err := verifyActiveMergeRecoveryPaths(repository.Root, state.ActiveMerge, activeSnapshots); err != nil {
 		return err
 	}
 	if err := verifyActiveMergeMaterializationPaths(
 		repository.Root,
 		state.ActiveMerge,
 		stringsToPaths(state.ActiveMerge.MaterializationPaths),
-		ignoreCase,
 	); err != nil {
 		return err
 	}
@@ -2282,6 +2321,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	}
 	overrides, privateOverrides, overrideReplacement, err := resolveStoredOverrides(
 		state.ActiveMerge.OverridePaths,
+		state.ActiveMerge.OverrideReplacements,
 		privateIndexPaths,
 	)
 	if err != nil {
@@ -2303,7 +2343,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 			return fmt.Errorf("private merge contains public-owned override path %q; abort and reconcile the private branch before retrying", path)
 		}
 	}
-	if err := revalidatePublicOwnership(ctx, repository, unmerged, nil, nil, ignoreCase); err != nil {
+	if err := revalidatePublicOwnership(ctx, repository, unmerged, nil, nil); err != nil {
 		return err
 	}
 	excludePath, err := repository.InfoExcludePath(ctx)
@@ -2314,7 +2354,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 		unionPaths(stringsToPaths(state.ManagedPaths), stringsToPaths(remainingPendingAdds), unmerged),
 		skipped,
 	)
-	preResolutionPlan, err := exclude.Build(excludePath, state.Exclude.BlockID, preResolutionExcluded)
+	preResolutionPlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, preResolutionExcluded)
 	if err != nil {
 		return err
 	}
@@ -2371,13 +2411,15 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 		delete(finalByPath, path.String())
 	}
 	finalPaths = mapPathValues(finalByPath)
+	if err := validateAssetDestinations(repository.Root, private.Path, stringsToPaths(state.ManagedPaths), finalPaths); err != nil {
+		return err
+	}
 	recoveryPaths = filterRecoveryPaths(recoveryPaths, finalPaths, overrides)
 	snapshotCandidates := materializationCandidates(finalPaths, state.ManagedPaths, materializeSkip)
 	if err := verifyActiveMergeMaterializationPaths(
 		repository.Root,
 		state.ActiveMerge,
 		snapshotCandidates,
-		ignoreCase,
 	); err != nil {
 		return err
 	}
@@ -2389,7 +2431,6 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 		state.ActiveMerge,
 		snapshotCandidates,
 		snapshots,
-		ignoreCase,
 	); err != nil {
 		return err
 	}
@@ -2459,6 +2500,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 		skipped,
 		deferred,
 		overrides,
+		overrideReplacement,
 		recoveryPaths,
 		mergeFileSnapshots(snapshots, overrideSnapshots),
 		remainingPendingAdds,
@@ -2530,7 +2572,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err := a.Store.Save(*state); err != nil {
 		return fmt.Errorf("save pushed private result state: %w", err)
 	}
-	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overrides, ignoreCase); err != nil {
+	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overrides); err != nil {
 		return err
 	}
 	finalSet := stringSet(pathsToStrings(finalPaths))
@@ -2546,7 +2588,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 
 	// Exclusion is written and verified before any private content reaches
 	// the public working tree.
-	excludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, excluded)
+	excludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, excluded)
 	if err != nil {
 		return err
 	}
@@ -2579,7 +2621,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	); err != nil {
 		return err
 	}
-	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overrides, ignoreCase); err != nil {
+	if err := revalidatePublicOwnership(ctx, repository, finalPaths, skipped, overrides); err != nil {
 		return err
 	}
 	trackedOverrides, err = currentlyTrackedOverrides(ctx, repository, overrides)
@@ -2596,7 +2638,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 		overrideSnapshots,
 		overrideReplacement,
 	)
-	if err := materializeFinal(repository.Root, private.Path, finalPaths, state.ManagedPaths, materializeSkip, overrideReplacement, materializationSnapshots, ignoreCase); err != nil {
+	if err := materializeFinal(repository.Root, private.Path, finalPaths, state.ManagedPaths, materializeSkip, overrideReplacement, materializationSnapshots); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, excluded); err != nil {
@@ -2861,8 +2903,7 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	if err != nil {
 		return err
 	}
-	preAbortIgnoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
 	preAbortPublicPaths, err := repository.TrackedPaths(ctx)
@@ -2870,7 +2911,11 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 		return err
 	}
 	preAbortSkipped := stringSet(state.ActiveMerge.SkippedPaths)
-	for _, conflict := range collision.Detect(preAbortPublicPaths, preAbortPaths, preAbortIgnoreCase) {
+	preAbortConflicts, preAbortConflictsErr := collision.DetectNative(repository.Root, preAbortPublicPaths, preAbortPaths)
+	if preAbortConflictsErr != nil {
+		return preAbortConflictsErr
+	}
+	for _, conflict := range preAbortConflicts {
 		preAbortSkipped[conflict.Private.String()] = struct{}{}
 	}
 	preAbortMaterializeSkip := unionSets(
@@ -2881,7 +2926,6 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 		repository.Root,
 		state.ActiveMerge,
 		filterSkipped(preAbortPaths, preAbortMaterializeSkip),
-		preAbortIgnoreCase,
 	); err != nil {
 		return err
 	}
@@ -2971,8 +3015,7 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	if err := private.ValidateTree(ctx, privateHead); err != nil {
 		return err
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
 	skipped := stringSet(state.ActiveMerge.SkippedPaths)
@@ -2983,7 +3026,11 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	if err != nil {
 		return err
 	}
-	for _, conflict := range collision.Detect(publicPaths, paths, ignoreCase) {
+	restoredOwnershipConflicts, restoredOwnershipConflictsErr := collision.DetectNative(repository.Root, publicPaths, paths)
+	if restoredOwnershipConflictsErr != nil {
+		return restoredOwnershipConflictsErr
+	}
+	for _, conflict := range restoredOwnershipConflicts {
 		skipped[conflict.Private.String()] = struct{}{}
 	}
 
@@ -2993,7 +3040,11 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	// exclusion block is still active. Never remove a path now owned by public
 	// Git; report it as skipped instead.
 	blockedConflictPaths := make(map[string]struct{})
-	for _, conflict := range collision.Detect(publicPaths, conflictPaths, ignoreCase) {
+	conflictOwnership, conflictOwnershipErr := collision.DetectNative(repository.Root, publicPaths, conflictPaths)
+	if conflictOwnershipErr != nil {
+		return conflictOwnershipErr
+	}
+	for _, conflict := range conflictOwnership {
 		blockedConflictPaths[conflict.Private.String()] = struct{}{}
 		skipped[conflict.Private.String()] = struct{}{}
 	}
@@ -3037,7 +3088,7 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 	if err != nil {
 		return err
 	}
-	excludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, excluded)
+	excludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, excluded)
 	if err != nil {
 		return err
 	}
@@ -3051,7 +3102,6 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 		repository.Root,
 		state.ActiveMerge,
 		materialized,
-		ignoreCase,
 	); err != nil {
 		return err
 	}
@@ -3063,7 +3113,6 @@ func (a App) abortSync(ctx context.Context, repository publicgit.Repository, sta
 		state.ActiveMerge,
 		materialized,
 		abortSnapshots,
-		ignoreCase,
 	); err != nil {
 		return err
 	}
@@ -3338,7 +3387,6 @@ func materializeFinal(
 	skipped map[string]struct{},
 	overrideReplacements map[string]string,
 	snapshots map[string]fileSnapshot,
-	ignoreCase bool,
 ) error {
 	finalSet := stringSet(pathsToStrings(finalPaths))
 
@@ -3347,7 +3395,7 @@ func materializeFinal(
 	// the final one; copying first and then removing Foo would delete foo too.
 	// The old workspace bytes are verified before removal, and the final copy
 	// requires the aliased destination to remain absent.
-	preRemovals, aliasTargets, err := caseRenamePreRemovals(finalPaths, previous, skipped, ignoreCase)
+	preRemovals, aliasTargets, err := nativeRenamePreRemovals(finalPaths, previous, skipped, publicRoot)
 	if err != nil {
 		return err
 	}
@@ -3364,7 +3412,7 @@ func materializeFinal(
 			return err
 		}
 		preRemovals = unionPaths(preRemovals, []pathmodel.Path{publicPath})
-		aliasTargets[pathmodel.Canonical(privatePath, ignoreCase)] = struct{}{}
+		aliasTargets[privatePath.String()] = struct{}{}
 	}
 	preRemoved := make(map[string]struct{}, len(preRemovals))
 	for _, path := range preRemovals {
@@ -3392,7 +3440,7 @@ func materializeFinal(
 		if !found {
 			return fmt.Errorf("workspace snapshot for materialization path %q is missing", path)
 		}
-		if _, aliasWasRemoved := aliasTargets[pathmodel.Canonical(path, ignoreCase)]; aliasWasRemoved {
+		if _, aliasWasRemoved := aliasTargets[path.String()]; aliasWasRemoved {
 			snapshot = fileSnapshot{Existed: false}
 		}
 		if err := filesync.CopyManagedIfUnchanged(
@@ -3434,32 +3482,33 @@ func materializeFinal(
 	return nil
 }
 
-// caseRenamePreRemovals returns stale previous spellings that must be removed
-// before final paths are copied on a case-insensitive filesystem. The second
-// result is the set of final canonical destinations whose old alias was
+// nativeRenamePreRemovals returns stale previous spellings that must be removed
+// before final paths are copied on an aliasing destination. The second
+// result is the set of exact final destinations whose old alias was
 // removed, allowing materialization to avoid validating an intentionally
 // absent destination against its pre-sync snapshot.
-func caseRenamePreRemovals(
+func nativeRenamePreRemovals(
 	finalPaths []pathmodel.Path,
 	previous []string,
 	skipped map[string]struct{},
-	ignoreCase bool,
+	root string,
 ) ([]pathmodel.Path, map[string]struct{}, error) {
 	aliasTargets := make(map[string]struct{})
-	if !ignoreCase {
-		return nil, aliasTargets, nil
+	keys, err := pathmodel.DestinationKeys(root, unionPaths(finalPaths, stringsToPaths(previous)))
+	if err != nil {
+		return nil, nil, err
 	}
 	finalSet := stringSet(pathsToStrings(finalPaths))
-	finalByCanonical := make(map[string]pathmodel.Path, len(finalPaths))
+	finalByKey := make(map[string]pathmodel.Path, len(finalPaths))
 	for _, path := range finalPaths {
 		if _, skip := skipped[path.String()]; skip {
 			continue
 		}
-		canonical := pathmodel.Canonical(path, true)
-		if existing, found := finalByCanonical[canonical]; found && existing != path {
-			return nil, nil, fmt.Errorf("final private tree contains ambiguous case-equivalent paths %q and %q", existing, path)
+		key := keys[path]
+		if existing, found := finalByKey[key]; found && existing != path {
+			return nil, nil, fmt.Errorf("final paths %q and %q alias in destination %q", existing, path, root)
 		}
-		finalByCanonical[canonical] = path
+		finalByKey[key] = path
 	}
 	var result []pathmodel.Path
 	for _, value := range previous {
@@ -3473,12 +3522,12 @@ func caseRenamePreRemovals(
 		if err != nil {
 			return nil, nil, err
 		}
-		canonical := pathmodel.Canonical(path, true)
-		if _, found := finalByCanonical[canonical]; !found {
+		final, found := finalByKey[keys[path]]
+		if !found {
 			continue
 		}
 		result = append(result, path)
-		aliasTargets[canonical] = struct{}{}
+		aliasTargets[final.String()] = struct{}{}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result, aliasTargets, nil
@@ -3649,17 +3698,20 @@ func revalidatePublicOwnership(
 	privatePaths []pathmodel.Path,
 	skipped map[string]struct{},
 	overrides map[string]pathmodel.Path,
-	ignoreCase bool,
 ) error {
 	publicPaths, err := repository.TrackedPaths(ctx)
 	if err != nil {
 		return err
 	}
-	for _, conflict := range collision.Detect(publicPaths, privatePaths, ignoreCase) {
+	currentOwnershipConflicts, currentOwnershipConflictsErr := collision.DetectNative(repository.Root, publicPaths, privatePaths)
+	if currentOwnershipConflictsErr != nil {
+		return currentOwnershipConflictsErr
+	}
+	for _, conflict := range currentOwnershipConflicts {
 		if _, allowed := skipped[conflict.Private.String()]; allowed {
 			continue
 		}
-		if conflict.Kind == collision.TrackedPath || conflict.Kind == collision.CaseInsensitive {
+		if conflict.Kind == collision.TrackedPath || conflict.Kind == collision.NativeAlias {
 			if override, allowed := overrides[conflict.Public.String()]; allowed && override == conflict.Public {
 				continue
 			}
@@ -3728,26 +3780,14 @@ func validateProspectivePrivateTreeSize(paths []pathmodel.Path) error {
 	return nil
 }
 
-// resolveStoredOverrides reconstructs the private spelling associated with each
-// public override path. Active merge state stores public paths because those
-// are the paths whose public ownership was approved for removal. A case-only
-// override can have a different private spelling, so continuation must derive
-// it from the private index instead of assuming both spellings are identical.
+// resolveStoredOverrides uses the recorded exact ownership association;
+// filesystem equivalence is never used to infer recovery intent.
 func resolveStoredOverrides(
 	values []string,
+	associations map[string]string,
 	privatePaths []pathmodel.Path,
 ) (map[string]pathmodel.Path, map[string]pathmodel.Path, map[string]string, error) {
-	privateExact := make(map[string]pathmodel.Path, len(privatePaths))
-	privateCanonical := make(map[string][]pathmodel.Path, len(privatePaths))
-	for _, path := range privatePaths {
-		if _, found := privateExact[path.String()]; found {
-			continue
-		}
-		privateExact[path.String()] = path
-		key := pathmodel.Canonical(path, true)
-		privateCanonical[key] = append(privateCanonical[key], path)
-	}
-
+	privateExact := pathIndex(privatePaths)
 	public := make(map[string]pathmodel.Path, len(values))
 	private := make(map[string]pathmodel.Path, len(values))
 	replacements := make(map[string]string, len(values))
@@ -3756,28 +3796,22 @@ func resolveStoredOverrides(
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		replacement, found := privateExact[value]
-		if !found {
-			matches := privateCanonical[pathmodel.Canonical(publicPath, true)]
-			if len(matches) != 1 {
-				return nil, nil, nil, spaserr.Wrap(
-					spaserr.KindUnsafeGitState,
-					fmt.Errorf("cannot recover ownership override for public path %q: expected exactly one private replacement, found %d", publicPath, len(matches)),
-				)
-			}
-			replacement = matches[0]
+		name, recorded := associations[value]
+		replacement, found := privateExact[name]
+		if !recorded || !found {
+			return nil, nil, nil, spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("cannot recover ownership override for public path %q: recorded private replacement %q is missing", publicPath, name))
 		}
 		public[value] = publicPath
-		private[replacement.String()] = replacement
-		replacements[value] = replacement.String()
+		private[name] = replacement
+		replacements[value] = name
 	}
 	return public, private, replacements, nil
 }
 
-func groupByCanonical(paths []pathmodel.Path, ignoreCase bool) map[string][]pathmodel.Path {
+func groupByDestination(paths []pathmodel.Path, keys map[pathmodel.Path]string) map[string][]pathmodel.Path {
 	result := make(map[string][]pathmodel.Path, len(paths))
 	for _, path := range paths {
-		key := pathmodel.Canonical(path, ignoreCase)
+		key := keys[path]
 		result[key] = append(result[key], path)
 	}
 	return result

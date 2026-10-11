@@ -65,7 +65,7 @@ func TestUnlinkExplicitCLIApprovalRoutes(t *testing.T) {
 						Message string `json:"message"`
 					} `json:"error"`
 				}
-				if err := json.Unmarshal(stderr, &envelope); err != nil || envelope.SchemaVersion != 2 || envelope.OK || envelope.Error.Code != "decision_required" || !strings.Contains(envelope.Error.Message, test.missing) || len(out) != 0 {
+				if err := json.Unmarshal(stderr, &envelope); err != nil || envelope.SchemaVersion != 3 || envelope.OK || envelope.Error.Code != "decision_required" || !strings.Contains(envelope.Error.Message, test.missing) || len(out) != 0 {
 					t.Fatalf("error envelope %s, %v", stderr, err)
 				}
 				if test.missing == "--discard-unsynced-changes" && !strings.Contains(envelope.Error.Message, filepath.Base(asset)) {

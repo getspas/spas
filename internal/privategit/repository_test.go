@@ -757,7 +757,7 @@ func TestValidateTreeAllowsOrdinaryTextMentioningLFSVersion(t *testing.T) {
 	}
 }
 
-func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
+func TestValidateTreeChecksNativeCaseConflict(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -776,8 +776,18 @@ func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
 		SafetyDir: filepath.Join(t.TempDir(), "safety"),
 	}
 	err := repository.ValidateTree(context.Background(), "HEAD")
-	if err == nil || !strings.Contains(err.Error(), "non-portable") {
-		t.Fatalf("ValidateTree() error = %v, want portability conflict", err)
+	probe, probeErr := os.OpenFile(filepath.Join(root, "Docs"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if probeErr != nil {
+		t.Fatal(probeErr)
+	}
+	probe.Close()
+	_, aliasErr := os.Stat(filepath.Join(root, "docs"))
+	if aliasErr == nil {
+		if err == nil || !strings.Contains(err.Error(), "aliases paths") {
+			t.Fatalf("ValidateTree() = %v, want native collision", err)
+		}
+	} else if err != nil {
+		t.Fatalf("ValidateTree() rejected native-distinct paths: %v", err)
 	}
 }
 

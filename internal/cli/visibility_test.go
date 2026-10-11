@@ -108,7 +108,7 @@ func assertVisibilityJSONStreams(t *testing.T, out, stderr []byte, failed bool, 
 	}
 	decoder := json.NewDecoder(bytes.NewReader(stderr))
 	var warning map[string]json.RawMessage
-	if err := decoder.Decode(&warning); err != nil || len(warning) != 2 || string(warning["schemaVersion"]) != "2" {
+	if err := decoder.Decode(&warning); err != nil || len(warning) != 2 || string(warning["schemaVersion"]) != "3" {
 		t.Fatalf("warning envelope %s: %v", stderr, err)
 	}
 	var diagnostic map[string]string
@@ -124,12 +124,12 @@ func assertVisibilityJSONStreams(t *testing.T, out, stderr []byte, failed bool, 
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		if err := decoder.Decode(&envelope); err != nil || envelope.SchemaVersion != 2 || envelope.OK || envelope.Error.Code != errorCode || envelope.Error.Message == "" || len(out) != 0 {
+		if err := decoder.Decode(&envelope); err != nil || envelope.SchemaVersion != 3 || envelope.OK || envelope.Error.Code != errorCode || envelope.Error.Message == "" || len(out) != 0 {
 			t.Fatalf("failure streams stdout %s, stderr %s, decode %v", out, stderr, err)
 		}
 	} else {
 		var result map[string]any
-		if err := json.Unmarshal(out, &result); err != nil || result["schemaVersion"] != float64(2) {
+		if err := json.Unmarshal(out, &result); err != nil || result["schemaVersion"] != float64(3) {
 			t.Fatalf("result %s: %v", out, err)
 		}
 	}

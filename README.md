@@ -90,10 +90,18 @@ SPAS reports the failing path rather than renaming it.
 Paths must remain inside the workspace and be representable in SPAS state and
 exclusion rules: valid UTF-8 without control or Unicode format characters. Git
 metadata, SPAS's temporary directory, symlinks, submodules, LFS pointers, and Git
-control files remain unsupported. Unicode NFC normalization, conservative
-case-collision checks, the 255-byte component limit, and the Windows 260-byte
-absolute-path preflight still apply; native identity and length changes remain
-pending.
+control files remain unsupported. Exact Git path identities are preserved.
+Distinct case and Unicode spellings can coexist when both the workspace and
+managed checkout can represent them. SPAS checks native destination aliases,
+including file/directory conflicts, before applying assets; Git's
+`core.ignoreCase` setting does not decide filesystem equivalence.
+
+The component limit of 255 bytes measured in NFC, independently of stored
+spelling, and the Windows 260-byte absolute-path preflight still
+apply; native length behavior remains pending. Development link-state schema 4
+records exact ownership replacements for recovery and rejects older schemas.
+Use the previous build to synchronize and unlink older development links before
+upgrading.
 
 ## Installation
 

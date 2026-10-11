@@ -30,10 +30,6 @@ func Parse(value string) (Path, error) {
 	if !utf8.ValidString(value) {
 		return "", fmt.Errorf("SPAS state and exclusion rules require valid UTF-8 paths")
 	}
-	// Managed paths are stored, excluded, and staged in Unicode NFC, matching
-	// the precomposed form Git itself uses on macOS. Exclude patterns are not
-	// normalized by Git, so a decomposed spelling would never match.
-	value = norm.NFC.String(value)
 	if runtime.GOOS == "windows" && strings.Contains(value, `\`) {
 		return "", fmt.Errorf("path must use Git slash separators")
 	}
@@ -151,13 +147,10 @@ func validateComponent(value string) error {
 	if value == "" || value == "." || value == ".." {
 		return fmt.Errorf("empty or traversal component")
 	}
-	// Private paths must be materializable on every supported filesystem.
-	// Common Unix filesystems limit one name component to 255 encoded bytes,
-	// while Windows limits one component to 255 Unicode characters. A 255-byte
-	// UTF-8 ceiling is the conservative common denominator: it also bounds the
-	// Unicode character count because every character occupies at least one byte.
-	if len(value) > limits.MaxPathComponentBytes {
-		return fmt.Errorf("component exceeds the cross-platform %d-byte filename limit", limits.MaxPathComponentBytes)
+	// Preserve the existing NFC-based component budget without changing the
+	// stored spelling. Native decomposition can expand an equivalent name.
+	if len(norm.NFC.String(value)) > limits.MaxPathComponentBytes {
+		return fmt.Errorf("component exceeds the cross-platform %d-byte filename limit measured in NFC", limits.MaxPathComponentBytes)
 	}
 	// Win32 aliases trailing dots/spaces and device names, and a colon can
 	// address an alternate data stream. Reject those forms on Windows before
@@ -181,23 +174,12 @@ func validateComponent(value string) error {
 	return nil
 }
 
-func Canonical(path Path, ignoreCase bool) string {
+// Folded groups candidate aliases for read-only lookup. Membership in a folded
+// group does not establish filesystem equivalence or asset identity.
+func Folded(path Path) string {
 	value := string(path)
 	if utf8.ValidString(value) {
-		value = norm.NFC.String(value)
-		if ignoreCase {
-			return cases.Fold().String(value)
-		}
-		return value
-	}
-
-	// Public Git indexes can contain arbitrary non-NUL byte names on Unix.
-	// ParseObserved preserves those names so collision scanning never makes an
-	// otherwise valid public repository unusable. Unicode normalization and
-	// folding cannot be applied to invalid UTF-8 without changing the byte
-	// sequence, so preserve non-ASCII bytes and fold only ASCII letters.
-	if !ignoreCase {
-		return value
+		return cases.Fold().String(norm.NFC.String(value))
 	}
 	bytes := []byte(value)
 	for index, character := range bytes {

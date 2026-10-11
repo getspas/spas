@@ -28,9 +28,6 @@ func TestResolveWorkspaceAliasPreservesSelectedComponents(t *testing.T) {
 				t.Fatalf("Resolve(%q): %v", value, err)
 			}
 			wantPath := selection
-			if selection == "cafe\u0301/re\u0301sume\u0301.txt" {
-				wantPath = "caf\u00e9/r\u00e9sum\u00e9.txt"
-			}
 			if path.String() != wantPath || observed != filepath.Join(workspace, filepath.FromSlash(selection)) {
 				t.Fatalf("Resolve(%q) = %q, %q", value, path, observed)
 			}

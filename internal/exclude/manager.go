@@ -27,6 +27,17 @@ type Plan struct {
 	managed           []pathmodel.Path
 	originalBlock     []byte
 	originalBlockSeen bool
+	workspaceRoot     string
+}
+
+func BuildForWorkspace(root, path, linkID string, managed []pathmodel.Path) (Plan, error) {
+	rules, err := pathmodel.ExclusionPaths(root, managed)
+	if err != nil {
+		return Plan{}, wrapValidationError(err)
+	}
+	plan, err := Build(path, linkID, rules)
+	plan.workspaceRoot = root
+	return plan, err
 }
 
 func Build(path, linkID string, managed []pathmodel.Path) (Plan, error) {
@@ -118,6 +129,12 @@ func Apply(plan Plan, expected ...[]pathmodel.Path) (repaired bool, err error) {
 		observedBlock := bytes.ReplaceAll(latest.originalBlock, []byte("\r\n"), []byte("\n"))
 		repaired = latest.Changed
 		for _, paths := range expected {
+			if plan.workspaceRoot != "" {
+				paths, err = pathmodel.ExclusionPaths(plan.workspaceRoot, paths)
+				if err != nil {
+					return err
+				}
+			}
 			var expectedBlock []byte
 			if len(paths) > 0 {
 				expectedBlock = buildBlock([]byte("# BEGIN SPAS link="+plan.linkID), []byte("# END SPAS link="+plan.linkID), []byte("\n"), paths)

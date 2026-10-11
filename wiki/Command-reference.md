@@ -67,8 +67,11 @@ spas add PATH... [flags]
 
 `spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged. Link state determines enrollment; editing exclusions does not change the managed asset set. Exclusion-writing commands rebuild missing or edited owned rules and report unexpected repairs on stderr (JSON code `exclusion_drift_repaired`). Ordinary requested enrollment/removal changes stay quiet. See [Safety and Limitations](Safety-and-limitations) for ownership markers, manual repair, and concurrency limits.
 
-Accepted filesystem aliases are enrolled using the actual directory-entry case
-and Unicode NFC spelling. This is the spelling used in state and exclusion rules.
+Enrollment uses the actual native directory-entry spelling. Distinct case or
+Unicode entries remain independent when both destinations support them. Imported
+asset-repository paths keep their exact Git spelling. Owned exclusions include
+native and precomposed aliases where necessary for project Git enumeration;
+those rules do not enroll additional assets.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -214,12 +217,12 @@ spas status --show-paths
 
 Compare managed assets in your local project workspace against the local managed checkout.
 
-File selection reads Git configuration and existing file metadata; it does not
-create a workspace probe file. Exact stored spellings take priority. Case aliases
-match when `core.ignoreCase` is true or existing file identities prove they refer
-to the same file. An unset `core.ignoreCase` defaults to false. Missing case aliases
-therefore require `core.ignoreCase=true`; exact missing paths remain selectable
-for pending removals and staged deletions.
+File selection reads existing directory entries without creating a workspace
+probe. Exact stored spellings take priority. An existing case or Unicode alias
+selects the enrolled path only when both spellings address the same native
+entry; distinct hard-link names remain distinct entries. Missing files require
+an exact stored spelling, including pending removals and staged deletions.
+`core.ignoreCase` does not establish native equivalence for diff selection.
 
 Accepted aliases select the authoritative enrolled filename in JSON, name-only,
 patch, and stat output, including `--staged`. The original selected spelling is
@@ -347,7 +350,7 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "ok": false,
   "error": {
     "code": "decision_required",

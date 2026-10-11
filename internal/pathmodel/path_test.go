@@ -67,15 +67,15 @@ func TestParseUsesHostFilenameSyntax(t *testing.T) {
 	}
 }
 
-func TestCanonical(t *testing.T) {
+func TestFolded(t *testing.T) {
 	t.Parallel()
 
 	path, err := Parse("docs/Architecture.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Canonical(path, true); got != "docs/architecture.md" {
-		t.Fatalf("Canonical() = %q", got)
+	if got := Folded(path); got != "docs/architecture.md" {
+		t.Fatalf("Folded() = %q", got)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestResolveDoesNotFollowManagedPathSymlinks(t *testing.T) {
 	}
 }
 
-func TestCanonicalPreservesInvalidUTF8ObservedPaths(t *testing.T) {
+func TestFoldedPreservesInvalidUTF8ObservedPaths(t *testing.T) {
 	t.Parallel()
 
 	raw := string([]byte{'D', 'o', 'c', 's', '/', 0xff, 'A'})
@@ -109,12 +109,12 @@ func TestCanonicalPreservesInvalidUTF8ObservedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Canonical(path, false); got != raw {
-		t.Fatalf("Canonical(case-sensitive) changed raw bytes: %x", []byte(got))
+	if got := path.String(); got != raw {
+		t.Fatalf("Path.String() changed raw bytes: %x", []byte(got))
 	}
 	want := string([]byte{'d', 'o', 'c', 's', '/', 0xff, 'a'})
-	if got := Canonical(path, true); got != want {
-		t.Fatalf("Canonical(case-insensitive) = %x, want %x", []byte(got), []byte(want))
+	if got := Folded(path); got != want {
+		t.Fatalf("Folded() = %x, want %x", []byte(got), []byte(want))
 	}
 }
 

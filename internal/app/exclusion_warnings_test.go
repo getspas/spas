@@ -107,7 +107,7 @@ func TestExclusionRepairWarnings(t *testing.T) {
 								SchemaVersion int     `json:"schemaVersion"`
 								Warning       Warning `json:"warning"`
 							}
-							if err := json.Unmarshal(stderr.Bytes(), &record); err != nil || record.SchemaVersion != 2 || record.Warning.Code != "exclusion_drift_repaired" {
+							if err := json.Unmarshal(stderr.Bytes(), &record); err != nil || record.SchemaVersion != 3 || record.Warning.Code != "exclusion_drift_repaired" {
 								t.Fatalf("warning = %s, %v", stderr.String(), err)
 							}
 						} else if !strings.Contains(stderr.String(), "warning: Reconciled unexpected changes") {

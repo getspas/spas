@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -531,6 +532,53 @@ func (r Repository) TreePaths(ctx context.Context, revision string) ([]pathmodel
 		paths = append(paths, entry.Path)
 	}
 	return paths, nil
+}
+
+// FileIdentity records the contents and executable state in a committed tree.
+type FileIdentity struct {
+	ObjectID   string
+	Executable bool
+}
+
+func (r Repository) TreeFiles(ctx context.Context, revision string) (map[pathmodel.Path]FileIdentity, error) {
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("ls-tree", "-r", "-l", "-z", "--end-of-options", revision)...)
+	if err != nil {
+		return nil, fmt.Errorf("list private tree %q: %w", revision, err)
+	}
+	entries, err := parseTree(result.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[pathmodel.Path]FileIdentity, len(entries))
+	for _, entry := range entries {
+		if entry.Type != "blob" || (entry.Mode != "100644" && entry.Mode != "100755") {
+			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("private path %q uses unsupported Git mode %s", entry.Path, entry.Mode))
+		}
+		files[entry.Path] = FileIdentity{ObjectID: entry.ObjectID, Executable: entry.Mode == "100755"}
+	}
+	return files, nil
+}
+
+// BlobDigest hashes committed contents without capturing the whole blob or
+// consulting the mutable checkout. Blob bytes never reach command output.
+func (r Repository) BlobDigest(ctx context.Context, objectID string) ([32]byte, error) {
+	hash := sha256.New()
+	runner := r.Git
+	runner.NonInteractive = true
+	runner.Stdout = hash
+	runner.Stderr = io.Discard
+	if _, err := runner.RunStreaming(ctx, r.Path, r.safeArgs("cat-file", "blob", objectID)...); err != nil {
+		var exitErr *gitexec.ExitError
+		if errors.As(err, &exitErr) {
+			diagnostic := *exitErr
+			diagnostic.Stdout = ""
+			err = &diagnostic
+		}
+		return [32]byte{}, fmt.Errorf("hash private blob %q: %w", objectID, err)
+	}
+	var digest [32]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
 }
 
 func (r Repository) StagedPaths(ctx context.Context) ([]pathmodel.Path, error) {

@@ -559,6 +559,7 @@ func newUnlinkCommand(root *rootOptions) *cobra.Command {
 	var keepFiles bool
 	var removeFiles bool
 	var approveRemoveFiles bool
+	var discardUnsyncedChanges bool
 	var keepClone bool
 	var removeClone bool
 	var force bool
@@ -567,13 +568,20 @@ func newUnlinkCommand(root *rootOptions) *cobra.Command {
 		Short: "Remove this workspace's local SPAS association",
 		Long: `Remove SPAS link state, its marked local-exclude block, and merge settings
 that still exactly match values SPAS wrote. Workspace files and the managed
-checkout are kept unless removal is explicitly requested.`,
+checkout are kept unless removal is explicitly requested. File cleanup refuses
+project-tracked targets and malformed exclusion ownership before deletion.
+Unsynchronized workspace contents and executable changes require separate
+discard approval; --yes and --force do not supply it.`,
 		Example: `  spas unlink
-  spas unlink --remove-files --approve-remove-files --remove-private-clone --non-interactive`,
+  spas unlink --remove-files --approve-remove-files --remove-private-clone --non-interactive
+  spas unlink --force --remove-files --approve-remove-files --discard-unsynced-changes --non-interactive`,
 		Args: cobra.NoArgs,
 		PreRunE: func(command *cobra.Command, args []string) error {
 			if approveRemoveFiles && !removeFiles {
 				return usageError("--approve-remove-files requires --remove-files")
+			}
+			if discardUnsyncedChanges && !removeFiles {
+				return usageError("--discard-unsynced-changes requires --remove-files")
 			}
 			if command.Flags().Changed("keep-files") {
 				if !keepFiles {
@@ -599,16 +607,18 @@ checkout are kept unless removal is explicitly requested.`,
 				return err
 			}
 			return instance.Unlink(command.Context(), app.UnlinkOptions{
-				Force:              force,
-				RemoveFiles:        removeFiles,
-				ApproveRemoveFiles: approveRemoveFiles,
-				RemovePrivateClone: removeClone,
+				Force:                  force,
+				RemoveFiles:            removeFiles,
+				ApproveRemoveFiles:     approveRemoveFiles,
+				DiscardUnsyncedChanges: discardUnsyncedChanges,
+				RemovePrivateClone:     removeClone,
 			})
 		},
 	}
 	command.Flags().BoolVar(&keepFiles, "keep-files", true, "keep SPAS-managed workspace files; this is the default")
 	command.Flags().BoolVar(&removeFiles, "remove-files", false, "remove SPAS-managed workspace files after confirmation")
 	command.Flags().BoolVar(&approveRemoveFiles, "approve-remove-files", false, "explicitly approve --remove-files in a non-interactive command")
+	command.Flags().BoolVar(&discardUnsyncedChanges, "discard-unsynced-changes", false, "separately approve discarding unsynchronized workspace contents and executable changes; requires --remove-files")
 	command.Flags().BoolVar(&keepClone, "keep-private-clone", true, "keep the managed checkout; this is the default")
 	command.Flags().BoolVar(&removeClone, "remove-private-clone", false, "remove the managed checkout")
 	command.Flags().BoolVar(&force, "force", false, "unlink despite pending state in the linked repository")

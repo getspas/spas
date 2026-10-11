@@ -785,13 +785,17 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 }
 
 type UnlinkOptions struct {
-	Force              bool
-	RemoveFiles        bool
-	ApproveRemoveFiles bool
-	RemovePrivateClone bool
+	Force                  bool
+	RemoveFiles            bool
+	ApproveRemoveFiles     bool
+	DiscardUnsyncedChanges bool
+	RemovePrivateClone     bool
 }
 
 func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
+	if (options.ApproveRemoveFiles || options.DiscardUnsyncedChanges) && !options.RemoveFiles {
+		return spaserr.Wrap(spaserr.KindInvalidUsage, fmt.Errorf("--approve-remove-files and --discard-unsynced-changes require --remove-files"))
+	}
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -846,26 +850,6 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 	if err != nil {
 		return err
 	}
-	if options.RemoveFiles {
-		if !options.ApproveRemoveFiles {
-			approved, err := a.Prompt.Confirm(ctx, "Remove every SPAS-managed workspace file?", false, false)
-			if err != nil {
-				return err
-			}
-			if !approved {
-				return fmt.Errorf("managed-file removal declined")
-			}
-		}
-		// Remove files before metadata. If a later unlink step fails, the link
-		// and its exclusions remain recoverable and a subsequent sync can
-		// restore files that already existed in the private repository.
-		for _, path := range removePaths {
-			if err := filesync.RemoveManaged(repository.Root, path); err != nil {
-				return err
-			}
-		}
-	}
-
 	excludePath, err := repository.InfoExcludePath(ctx)
 	if err != nil {
 		return err
@@ -874,6 +858,60 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 	if err != nil {
 		return err
 	}
+	if options.RemoveFiles {
+		if err := a.validateUnlinkOwnership(ctx, repository, removePaths); err != nil {
+			return err
+		}
+		snapshots, unsynced, err := a.inspectUnlinkFiles(ctx, repository.Root, state, removePaths)
+		if err != nil {
+			return err
+		}
+		if !options.ApproveRemoveFiles {
+			approved, err := a.Prompt.Confirm(ctx, "Remove every SPAS-managed workspace file? Use --approve-remove-files to approve.", false, false)
+			if err != nil {
+				return err
+			}
+			if !approved {
+				return fmt.Errorf("managed-file removal declined")
+			}
+		}
+		if len(unsynced) > 0 && !options.DiscardUnsyncedChanges {
+			approved, err := a.Prompt.Confirm(ctx, fmt.Sprintf("Discard unsynchronized changes in %s? These bytes cannot be restored by SPAS. Use --discard-unsynced-changes to approve.", strings.Join(pathsToStrings(unsynced), ", ")), false, false)
+			if err != nil {
+				return err
+			}
+			if !approved {
+				return fmt.Errorf("unsynchronized-file discard declined")
+			}
+		}
+		// Prompts may take arbitrarily long. Recheck the whole cleanup before
+		// deleting anything, then bind each removal to its inspected file state.
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		plan, err = exclude.Build(excludePath, state.Exclude.BlockID, nil)
+		if err != nil {
+			return err
+		}
+		if err := a.validateUnlinkOwnership(ctx, repository, removePaths); err != nil {
+			return err
+		}
+		if err := verifyUnlinkSnapshots(repository.Root, removePaths, snapshots); err != nil {
+			return err
+		}
+		// Remove files before metadata. If a later unlink step fails, the link
+		// and its exclusions remain recoverable and a subsequent sync can
+		// restore files that already existed in the private repository.
+		for _, path := range removePaths {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+			if err := filesync.RemoveManagedIfUnchanged(repository.Root, path, expectedFilesyncSnapshot(snapshots[path.String()])); err != nil {
+				return err
+			}
+		}
+	}
+
 	if err := a.applyExclusions(plan, expectedExclusions(state)...); err != nil {
 		return err
 	}
@@ -921,13 +959,25 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 func unlinkWorkspacePaths(state linkstate.State) ([]pathmodel.Path, error) {
 	values := append([]string{}, state.ManagedPaths...)
 	values = append(values, state.PendingAdds...)
+	values = append(values, state.PendingRemovalPaths()...)
 	if state.ActiveMerge != nil {
 		values = append(values, state.ActiveMerge.ConflictPaths...)
 		values = append(values, state.ActiveMerge.RemainingPendingAdds...)
+		values = append(values, state.ActiveMerge.MaterializationPaths...)
+		values = append(values, state.ActiveMerge.RecoveryPaths...)
+		for _, removal := range state.ActiveMerge.RemainingPendingRemoves {
+			values = append(values, removal.Path)
+		}
 	}
 	if state.Materializing != nil {
 		values = append(values, state.Materializing.ExcludedPaths...)
 		values = append(values, state.Materializing.RemainingPendingAdds...)
+		// ExcludedPaths records accepted ownership. FinalPaths also contains
+		// skipped remote files whose workspace counterparts remain unmanaged.
+		values = append(values, state.Materializing.RecoveryPaths...)
+		for _, removal := range state.Materializing.RemainingPendingRemoves {
+			values = append(values, removal.Path)
+		}
 	}
 	set := make(map[string]pathmodel.Path, len(values))
 	for _, value := range values {

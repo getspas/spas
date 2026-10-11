@@ -163,6 +163,45 @@ spas diff --stat
 | `spas completion` | Generate auto-completion scripts for Bash, Zsh, Fish, or PowerShell |
 | `spas version` | Display version, commit hash, and build metadata |
 
+### Unlink and Optional Cleanup
+
+`spas unlink` keeps workspace files and the managed checkout, removes SPAS's
+local exclusions, and reports files now eligible for project Git staging.
+To remove synchronized workspace files during unlink:
+
+```bash
+spas unlink --remove-files --approve-remove-files --non-interactive
+```
+
+Unsynchronized contents, executable changes, and never-synchronized additions
+need separate discard approval. Interactive cleanup names the affected files
+and asks for that approval. For unattended cleanup, inspect the files first and
+explicitly add `--discard-unsynced-changes`:
+
+```bash
+spas unlink --force --remove-files --approve-remove-files \
+  --discard-unsynced-changes --non-interactive
+```
+
+`--discard-unsynced-changes` requires `--remove-files`. `--yes`, `--force`, and
+general file-removal approval do not authorize unsynchronized discard. Missing
+approvals return exit code 4 before deleting files. `--force` permits abandoning
+pending synchronization; it does not bypass cleanup safety checks.
+
+Cleanup refuses the entire target set if project Git now tracks any target or
+the owned exclusion markers are malformed. It also rejects observed edits,
+executable changes, and unsupported file substitutions after inspection.
+Avoid concurrent editing or Git operations during cleanup: SPAS cannot lock out
+noncooperating tools between its checks and filesystem operations.
+
+If cleanup or unlink metadata updates fail, the link remains available for a
+retry. Already removed synchronized files can be restored by synchronization;
+approved discarded unsynchronized bytes cannot be reconstructed by SPAS.
+`--remove-private-clone` separately removes the internal checkout during unlink.
+If that optional cleanup fails after unlink succeeds, the command returns
+nonzero, states that the workspace is already unlinked, and names the retained
+checkout paths.
+
 ### Non-Interactive & CI Automation
 
 Pass `--json` and explicit policies to run SPAS in automated pipelines without interactive prompts:

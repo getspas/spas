@@ -1276,9 +1276,10 @@ func TestUnlinkRemoveFilesIncludesPendingAdditions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := instance.Unlink(ctx, UnlinkOptions{
-		Force:              true,
-		RemoveFiles:        true,
-		ApproveRemoveFiles: true,
+		Force:                  true,
+		RemoveFiles:            true,
+		ApproveRemoveFiles:     true,
+		DiscardUnsyncedChanges: true,
 	}); err != nil {
 		t.Fatalf("Unlink(remove pending add) error = %v", err)
 	}

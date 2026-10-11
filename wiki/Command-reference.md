@@ -274,11 +274,34 @@ spas unlink [flags]
 | `--keep-files` | Flag | `true` | Retain managed files in the workspace (default) |
 | `--remove-files` | Flag | `false` | Delete managed assets from the project workspace |
 | `--approve-remove-files` | Flag | `false` | Explicit approval for `--remove-files` in non-interactive mode |
+| `--discard-unsynced-changes` | Flag | `false` | Separately approve discarding unsynchronized contents and executable changes; requires `--remove-files` |
 | `--keep-private-clone` | Flag | `true` | Retain the local managed checkout in application storage (default) |
 | `--remove-private-clone` | Flag | `false` | Delete the local managed checkout from storage |
-| `--force` | Flag | `false` | Bypass pending-recovery and asset safety checks when unlinking |
+| `--force` | Flag | `false` | Allow unlink despite pending synchronization or checkout recovery; does not approve workspace deletion or unsynchronized discard |
 
 Rules outside the exact owned block are preserved. If old ownership markers no longer match, those rules remain external and may survive unlink; review them manually if files stay ignored.
+
+Cleanup checks every owned target for project Git ownership and validates the
+exclusion-block structure before deleting files. A conflict or malformed block
+refuses the entire cleanup. General removal approval covers synchronized files;
+unsynchronized contents, executable changes, and never-synchronized additions
+require a separate prompt naming the affected paths or
+`--discard-unsynced-changes`. Neither `--yes` nor `--force` supplies that approval.
+Missing approval returns exit code 4 before deletion. Complete options run
+without prompting, including with `--json`.
+
+```bash
+# Remove synchronized workspace assets
+spas unlink --remove-files --approve-remove-files --non-interactive
+
+# Separately approve abandoning pending work and discarding unsynchronized files
+spas unlink --force --remove-files --approve-remove-files \
+  --discard-unsynced-changes --non-interactive
+```
+
+The managed checkout stays unless `--remove-private-clone` is supplied. Cleanup
+failure after link removal returns nonzero, states that unlink succeeded, and
+names the retained checkout paths.
 
 > [!WARNING]
 >

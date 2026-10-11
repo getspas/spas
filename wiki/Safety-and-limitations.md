@@ -16,7 +16,7 @@ SPAS stops immediately and reports the condition when it encounters an unsupport
 
 - **Advisory File Locking:** SPAS coordinates operations using OS-level advisory locks on link operations (in user data storage) and local exclusions (`.git/info/exclude.spas.lock`). Other processes modifying `.git/info/exclude` without acquiring this lock may race with SPAS.
 - **Atomic File Operations:** SPAS writes synchronized assets to temporary staging files on the destination filesystem and renames them into place. While this minimizes corruption risks, cross-platform crash durability depends on host filesystem semantics.
-- **Concurrent Edits:** Avoid modifying managed assets in your IDE or editor while `spas sync` is actively materializing files.
+- **Concurrent Edits:** Avoid modifying managed assets in your IDE or editor while `spas sync` is actively materializing files or `spas unlink --remove-files` is deleting them. Cleanup rejects observed changes after inspection, but noncooperating edits or Git operations can still race the final checks and filesystem operations.
 
 ---
 
@@ -81,6 +81,35 @@ SPAS enforces safety limits to prevent runaway resource consumption:
 | **Streaming Git Command Output** | Full output forwarded; last **64 KiB per stream** retained for diagnostics |
 
 SPAS does not place hard quotas on individual blob sizes or overall network transfers, though large assets are constrained by available disk space and network bandwidth.
+
+---
+
+## 7. Unlink Cleanup
+
+Default unlink keeps workspace files and removes SPAS's local exclusions.
+Optional `--remove-files` cleanup derives targets from managed, pending, and
+owned recovery metadata. Explicitly skipped, unenrolled files remain untouched.
+Before deletion, cleanup validates owned exclusion markers and refuses all
+targets if project Git now tracks any target.
+
+Workspace contents and executable state are compared with the last completed
+synchronization, even when the managed checkout contains an unpushed commit.
+Unsynchronized changes and never-synchronized additions require separate discard
+approval naming the affected files, or `--discard-unsynced-changes` with
+`--remove-files`. General file-removal approval, `--yes`, and `--force` cannot
+substitute for that decision. Missing required approval returns exit code 4
+without deleting files.
+
+Deletion is bound to inspected contents, existence, and executable state. Later
+observed edits or unsupported type substitutions stop cleanup. Link metadata
+remains available if workspace cleanup or unlink metadata updates fail, allowing
+a retry after resolving the failure. Already removed synchronized contents can
+be restored through sync; approved discarded unsynchronized bytes cannot be
+reconstructed by SPAS. Multi-file cleanup is not atomic.
+
+Internal checkout removal is a separate option during unlink. If
+`--remove-private-clone` fails after successful unlink, the command returns
+nonzero and names the remaining checkout paths. The workspace remains unlinked.
 
 ---
 

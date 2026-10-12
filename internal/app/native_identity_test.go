@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/getspas/spas/internal/linkstate"
-	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/spaserr"
 )
 
@@ -607,16 +606,10 @@ func TestNativeCheckoutRejectsUntrackedHardLink(t *testing.T) {
 	}
 }
 
-func TestNativeComposedFilenameComponentBudget(t *testing.T) {
-	t.Parallel()
+func TestNativeLongUnicodeFilenameLifecycle(t *testing.T) {
+	configureNativeLongPaths(t)
 	instance, workspace, root, remote := fixture(t)
-	name := strings.Repeat("é", 100) + ".txt"
-	state := loadState(t, instance, workspace)
-	for _, destination := range []string{workspace, state.Private.LocalRepositoryPath} {
-		if err := pathmodel.ValidatePathLength(destination, pathmodel.Path(name)); err != nil {
-			t.Skipf("retained root length limit applies: %v", err)
-		}
-	}
+	name := strings.Repeat("é", 128) + ".txt"
 	if err := os.WriteFile(filepath.Join(workspace, name), []byte("composed filename\n"), 0o600); err != nil {
 		t.Skipf("native filesystem cannot represent filename: %v", err)
 	}

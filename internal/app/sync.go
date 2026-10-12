@@ -249,14 +249,6 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	if err := validateProspectivePrivateTreeSize(candidatePrivate); err != nil {
 		return err
 	}
-	for _, path := range candidatePrivate {
-		if err := pathmodel.ValidatePathLength(repository.Root, path); err != nil {
-			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-		}
-		if err := pathmodel.ValidatePathLength(private.Path, path); err != nil {
-			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-		}
-	}
 	// Native destination keys support the ownership override ambiguity check.
 
 	publicPaths, err := repository.TrackedPaths(ctx)
@@ -640,6 +632,9 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 					)
 				}
 				if !mergeInProgress {
+					// Git can fail checkout before starting a merge. Restore the
+					// recorded result so a local commit cannot strand the link.
+					rollbackNeeded = true
 					return err
 				}
 				livePreMergeHead, headErr := private.Head(ctx)
@@ -3237,12 +3232,6 @@ func planLocalChanges(
 		value := path.String()
 		if _, skip := skipped[value]; skip {
 			continue
-		}
-		if err := pathmodel.ValidatePathLength(publicRoot, path); err != nil {
-			return localChangePlan{}, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-		}
-		if err := pathmodel.ValidatePathLength(privateRoot, path); err != nil {
-			return localChangePlan{}, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 		publicPath := path.OSPath(publicRoot)
 		snapshot, err := snapshotFile(publicPath)

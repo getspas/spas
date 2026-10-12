@@ -206,7 +206,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
-	files, err := a.expandPaths(repository.Root, state.Private.LocalRepositoryPath, options.Paths)
+	files, err := a.expandPaths(repository.Root, options.Paths)
 	if err != nil {
 		return err
 	}
@@ -1072,7 +1072,7 @@ func (a App) validateRepositoryIdentity(state linkstate.State) error {
 	return nil
 }
 
-func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]pathmodel.Path, error) {
+func (a App) expandPaths(workspaceRoot string, values []string) ([]pathmodel.Path, error) {
 	set := make(map[string]pathmodel.Path)
 	observer := pathmodel.NewObserver(workspaceRoot)
 	for _, value := range values {
@@ -1089,12 +1089,6 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 		if info.Mode().IsRegular() {
-			if err := pathmodel.ValidatePathLength(workspaceRoot, path); err != nil {
-				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(privateRoot, path); err != nil {
-				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
 			if err := privategit.ValidateManagedPath(path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
@@ -1128,12 +1122,6 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			}
 			managed, err := observer.Path(current)
 			if err != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(workspaceRoot, managed); err != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(privateRoot, managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
 			if err := privategit.ValidateManagedPath(managed); err != nil {

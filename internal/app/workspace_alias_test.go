@@ -24,7 +24,7 @@ func TestExpandPathsThroughWorkspaceAlias(t *testing.T) {
 	}
 	instance := App{PathBase: alias}
 	for _, selected := range []string{"assets/secret.env", "assets"} {
-		paths, err := instance.expandPaths(workspace, root, []string{filepath.Join(alias, filepath.FromSlash(selected))})
+		paths, err := instance.expandPaths(workspace, []string{filepath.Join(alias, filepath.FromSlash(selected))})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,7 +36,7 @@ func TestExpandPathsThroughWorkspaceAlias(t *testing.T) {
 	if err := os.Symlink("assets", link); err != nil {
 		t.Fatal(err)
 	}
-	_, err := instance.expandPaths(workspace, root, []string{filepath.Join(alias, "link", "secret.env")})
+	_, err := instance.expandPaths(workspace, []string{filepath.Join(alias, "link", "secret.env")})
 	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
 		t.Fatalf("expandPaths(managed symlink) = %v, want KindUnsupportedPath", err)
 	}
@@ -57,7 +57,7 @@ func TestExpandPathsThroughAliasPreservesUnicodeValidation(t *testing.T) {
 	if err := os.WriteFile(nfc, []byte("normalized"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	paths, err := (App{PathBase: alias}).expandPaths(workspace, workspace,
+	paths, err := (App{PathBase: alias}).expandPaths(workspace,
 		[]string{filepath.Join(alias, "cafe\u0301.env")})
 	if err != nil || len(paths) != 1 || paths[0].String() != nativeEntrySpelling(t, workspace, "cafe\u0301.env") {
 		t.Fatalf("expandPaths() changed native identity: %q, %v", paths, err)

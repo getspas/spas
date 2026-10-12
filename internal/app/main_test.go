@@ -148,6 +148,10 @@ func runGitProxy() int {
 		_, _ = fmt.Fprintln(os.Stdout, "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)")
 		return 1
 	}
+	if mode == "fail-before-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
+		_, _ = fmt.Fprintln(os.Stderr, "injected checkout failure for "+os.Getenv("SPAS_APP_EDIT_PATH"))
+		return 1
+	}
 	command := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), args...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
@@ -158,6 +162,12 @@ func runGitProxy() int {
 			return exitErr.ExitCode()
 		}
 		return 127
+	}
+	if mode == "obstruct-staging-after-push" && containsArgument(args, "push") {
+		if err := os.WriteFile(os.Getenv("SPAS_APP_EDIT_PATH"), []byte("occupied\n"), 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if mode == "track-public-after-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
 		path := os.Getenv("SPAS_APP_EDIT_PATH")

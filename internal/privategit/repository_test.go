@@ -791,7 +791,7 @@ func TestValidateTreeChecksNativeCaseConflict(t *testing.T) {
 	}
 }
 
-func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
+func TestValidateTreeAllowsLongGitPaths(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -808,21 +808,8 @@ func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
 		Git:       gitexec.Runner{},
 		SafetyDir: filepath.Join(t.TempDir(), "safety"),
 	}
-	err := repository.ValidateTree(context.Background(), "HEAD")
-	if runtime.GOOS == "windows" {
-		if err == nil {
-			t.Fatal("ValidateTree() error = nil on Windows, want path length error")
-		}
-		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-			t.Fatalf("ValidateTree() error kind = %v, want KindUnsupportedPath", kind)
-		}
-		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
-			t.Fatalf("ValidateTree() error = %v, want Windows limit error", err)
-		}
-	} else {
-		if err != nil {
-			t.Fatalf("ValidateTree() error = %v on %s, want nil", err, runtime.GOOS)
-		}
+	if err := repository.ValidateTree(context.Background(), "HEAD"); err != nil {
+		t.Fatalf("ValidateTree() rejected long Git path: %v", err)
 	}
 }
 

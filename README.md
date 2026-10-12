@@ -96,9 +96,13 @@ managed checkout can represent them. SPAS checks native destination aliases,
 including file/directory conflicts, before applying assets; Git's
 `core.ignoreCase` setting does not decide filesystem equivalence.
 
-The component limit of 255 bytes measured in NFC, independently of stored
-spelling, and the Windows 260-byte absolute-path preflight still
-apply; native length behavior remains pending. [Schema contracts](wiki/Schemas.md)
+Path lengths follow the actual Git and filesystem operations on each machine.
+SPAS imposes no fixed component-byte or absolute-path ceiling. Support depends
+on both the workspace and managed checkout destinations, including their roots
+and Git configuration; a name that works on one machine may fail on another.
+Failures identify the operation and path; interrupted synchronization retains
+its recovery state. Tree-entry and metadata-size bounds still apply separately.
+[Schema contracts](wiki/Schemas.md)
 document the independent persisted-state and CLI JSON versions. State records
 exact ownership replacements for recovery and accepts only its current version,
 without migration.

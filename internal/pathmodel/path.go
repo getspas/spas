@@ -11,7 +11,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/getspas/spas/internal/limits"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -132,25 +131,10 @@ func Resolve(publicRoot, base, value string) (Path, string, error) {
 	}
 	return "", "", fmt.Errorf("path must stay inside the public workspace")
 }
-func ValidatePathLength(root string, path Path) error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	full := path.OSPath(root)
-	if len(full) >= limits.MaxWindowsPathLength {
-		return fmt.Errorf("total path length of %q (%d bytes) in root %q reaches or exceeds the SPAS Windows preflight limit of %d bytes", full, len(full), root, limits.MaxWindowsPathLength)
-	}
-	return nil
-}
 
 func validateComponent(value string) error {
 	if value == "" || value == "." || value == ".." {
 		return fmt.Errorf("empty or traversal component")
-	}
-	// Preserve the existing NFC-based component budget without changing the
-	// stored spelling. Native decomposition can expand an equivalent name.
-	if len(norm.NFC.String(value)) > limits.MaxPathComponentBytes {
-		return fmt.Errorf("component exceeds the cross-platform %d-byte filename limit measured in NFC", limits.MaxPathComponentBytes)
 	}
 	// Win32 aliases trailing dots/spaces and device names, and a colon can
 	// address an alternate data stream. Reject those forms on Windows before

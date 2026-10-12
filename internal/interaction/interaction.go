@@ -22,7 +22,7 @@ type Prompter struct {
 }
 
 func Detect(in io.Reader, out io.Writer, nonInteractive bool) Prompter {
-	interactive := !nonInteractive && isTerminal(in) && isTerminalWriter(out)
+	interactive := !nonInteractive && IsTerminal(in) && IsTerminal(out)
 	return Prompter{In: in, Out: out, Interactive: interactive}
 }
 
@@ -166,12 +166,8 @@ func readLine(reader io.Reader) (string, error) {
 	}
 }
 
-func isTerminal(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	return ok && term.IsTerminal(int(file.Fd()))
-}
-
-func isTerminalWriter(writer io.Writer) bool {
-	file, ok := writer.(*os.File)
+// IsTerminal reports terminal attachment at the injected stream boundary.
+func IsTerminal(stream any) bool {
+	file, ok := stream.(*os.File)
 	return ok && term.IsTerminal(int(file.Fd()))
 }

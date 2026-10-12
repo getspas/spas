@@ -36,7 +36,7 @@ func TestExecuteDoctorDistinguishesCorruptionFromAbsence(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, jsonMode := range []bool{false, true} {
-				args := []string{"doctor", "--repo", test.directory}
+				args := []string{"doctor", "--repo", test.directory, "--color=always"}
 				if jsonMode {
 					args = append(args, "--json")
 				}
@@ -45,12 +45,23 @@ func TestExecuteDoctorDistinguishesCorruptionFromAbsence(t *testing.T) {
 					t.Fatalf("Doctor exit = %d, output=%s stderr=%s", code, output, stderr)
 				}
 				if jsonMode {
+					if strings.Contains(string(output)+string(stderr), "\x1b") {
+						t.Fatal("color in JSON doctor output")
+					}
 					var result app.DoctorResult
 					if err := json.Unmarshal(output, &result); err != nil {
 						t.Fatal(err)
 					}
 					if result.Healthy != (test.code == 0) || (result.Errors == 0) != (test.code == 0) || len(stderr) != 0 {
 						t.Fatalf("Doctor result = %s, stderr=%s", output, stderr)
+					}
+				} else {
+					status := "\x1b[33mwarning"
+					if test.code == 1 {
+						status = "\x1b[31merror"
+					}
+					if !strings.Contains(string(output), status) {
+						t.Fatalf("missing semantic doctor status: %q", output)
 					}
 				}
 				if test.code == 1 && !strings.Contains(string(output), "bad config") {

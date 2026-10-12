@@ -22,6 +22,7 @@ import (
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/publicgit"
@@ -31,15 +32,16 @@ import (
 var removePrivateClone = os.RemoveAll
 
 type App struct {
-	Git      gitexec.Runner
-	Store    linkstate.Store
-	Prompt   interaction.Prompter
-	Out      io.Writer
-	Err      io.Writer
-	RepoHint string
-	PathBase string
-	JSON     bool
-	Provider provider.RepositoryProvider
+	Presenter presentation.Presenter
+	Git       gitexec.Runner
+	Store     linkstate.Store
+	Prompt    interaction.Prompter
+	Out       io.Writer
+	Err       io.Writer
+	RepoHint  string
+	PathBase  string
+	JSON      bool
+	Provider  provider.RepositoryProvider
 }
 
 type ExistingExcludePolicy string
@@ -747,7 +749,8 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if status.PrivateAhead != nil && status.PrivateBehind != nil {
 		aheadBehind = fmt.Sprintf("%d ahead, %d behind", *status.PrivateAhead, *status.PrivateBehind)
 	}
-	if _, err = fmt.Fprintf(a.Out, "Link:\n  Linked repository:   %s\n  Linked branch:       %s\n  Initialized:         %s\n",
+	if _, err = fmt.Fprintf(a.Out, "%s\n  Linked repository:   %s\n  Linked branch:       %s\n  Initialized:         %s\n",
+		a.Presenter.Out("Link:", presentation.Result),
 		status.PrivateRepository,
 		valueOr(status.PrivateBranch, "discover on first sync"),
 		boolState(status.PrivateInitialized),
@@ -759,7 +762,8 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 			return err
 		}
 	}
-	if _, err = fmt.Fprintf(a.Out, "\nProject workspace:\n  Branch:               %s\n  Merge protection:    %s\n",
+	if _, err = fmt.Fprintf(a.Out, "\n%s\n  Branch:               %s\n  Merge protection:    %s\n",
+		a.Presenter.Out("Project workspace:", presentation.Result),
 		valueOr(status.PublicBranch, "detached HEAD"),
 		boolState(status.MergeProtection.Enabled),
 	); err != nil {
@@ -777,13 +781,15 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if status.PrivateHeadMismatch {
 		privateHeadStatus = fmt.Sprintf("mismatch (expected %s, actual %s)", valueOr(status.ExpectedPrivateHead, "unborn"), valueOr(status.ActualPrivateHead, "unborn"))
 	}
-	_, err = fmt.Fprintf(a.Out, "\nPrivate files:\n  Managed:              %d\n  Modified locally:     %d\n  Missing locally:      %d\n  Pending additions:    %d\n  Pending removals:     %d\n  Cached remote state:  %s\n\nHealth:\n  Private HEAD binding:  %s\n  Path conflicts:       %d\n  Exclusion failures:   %d\n  Pending recovery:     %s\n",
+	_, err = fmt.Fprintf(a.Out, "\n%s\n  Managed:              %d\n  Modified locally:     %d\n  Missing locally:      %d\n  Pending additions:    %d\n  Pending removals:     %d\n  Cached remote state:  %s\n\n%s\n  Private HEAD binding:  %s\n  Path conflicts:       %d\n  Exclusion failures:   %d\n  Pending recovery:     %s\n",
+		a.Presenter.Out("Private files:", presentation.Result),
 		status.ManagedFiles,
 		len(status.WorkspaceModified),
 		len(status.WorkspaceMissing),
 		len(status.PendingAdds),
 		len(status.PendingRemovals),
 		aheadBehind,
+		a.Presenter.Out("Health:", presentation.Result),
 		privateHeadStatus,
 		len(status.PathConflicts),
 		len(status.ExclusionFailures),
@@ -1283,6 +1289,7 @@ func (a App) warnf(format string, arguments ...any) error {
 	if a.JSON || a.Err == nil {
 		return nil
 	}
+	format = strings.Replace(format, "warning:", a.Presenter.Err("warning:", presentation.Warning), 1)
 	_, err := fmt.Fprintf(a.Err, format, arguments...)
 	return err
 }
@@ -1300,7 +1307,7 @@ func (a App) write(value any) error {
 		sort.Strings(keys)
 		for _, key := range keys {
 			item := typed[key]
-			if _, err := fmt.Fprintf(a.Out, "%s: %v\n", humanize(key), item); err != nil {
+			if _, err := fmt.Fprintf(a.Out, "%s %v\n", a.Presenter.Out(humanize(key)+":", presentation.Result), item); err != nil {
 				return err
 			}
 		}

@@ -19,6 +19,7 @@ import (
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/publicgit"
 	"github.com/getspas/spas/internal/spaserr"
@@ -119,7 +120,7 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 }
 
 func (a App) diffFiles(ctx context.Context, root, oldFile, newFile string, stat bool) error {
-	args := []string{"--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--no-index"}
+	args := []string{"--no-pager", "diff", "--color=" + a.Presenter.GitColor(), "--no-ext-diff", "--no-textconv", "--no-index"}
 	if stat {
 		args = append(args, "--stat")
 	}
@@ -180,9 +181,9 @@ func (a App) diffStaged(ctx context.Context, repository publicgit.Repository, st
 		if len(changed) == 0 {
 			return nil
 		}
-		return private.StreamStagedDiff(ctx, options.Stat, stringsToPaths(changed), a.Out)
+		return private.StreamStagedDiff(ctx, options.Stat, stringsToPaths(changed), a.Out, a.Presenter.GitColor())
 	}
-	return private.StreamStagedDiff(ctx, options.Stat, nil, a.Out)
+	return private.StreamStagedDiff(ctx, options.Stat, nil, a.Out, a.Presenter.GitColor())
 }
 
 func (a App) selectDiffPaths(ctx context.Context, repository publicgit.Repository, known, values []string) ([]string, error) {
@@ -532,7 +533,14 @@ func (a App) renderDoctorResult(result DoctorResult) error {
 		return nil
 	}
 	for _, check := range result.Checks {
-		if _, err := fmt.Fprintf(a.Out, "%-18s %-7s %s\n", check.Name, check.Status, check.Message); err != nil {
+		style := presentation.Success
+		switch check.Status {
+		case "warning":
+			style = presentation.Warning
+		case "error":
+			style = presentation.Error
+		}
+		if _, err := fmt.Fprintf(a.Out, "%-18s %s %s\n", check.Name, a.Presenter.Out(fmt.Sprintf("%-7s", check.Status), style), check.Message); err != nil {
 			return err
 		}
 	}

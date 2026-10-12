@@ -14,6 +14,7 @@ The following flags apply to all SPAS commands:
 | `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
 | `--non-interactive` | Flag | Disable SPAS and supported Git authentication prompts; fail if a required decision is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
+| `--color MODE` | `auto` \| `always` \| `never` | Select terminal color (default: `auto`); machine output stays plain |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
 | `--timeout DURATION` | String | Maximum execution duration (e.g. `30s`, `5m`; default: no timeout) |
@@ -22,6 +23,25 @@ The following flags apply to all SPAS commands:
 
 > [!NOTE]
 > `-y` / `--yes` automatically accepts non-destructive setup suggestions. It does *not* authorize committing assets, deleting files, overriding tracked repository paths, discarding uncommitted workspace changes, or resolving merge conflicts.
+
+Human output uses restrained color for result labels, diagnostic statuses,
+warnings, errors, and Git diffs. Each destination is checked separately:
+redirecting stdout leaves its automatic output plain even when stderr is a
+terminal. Presentation is independent of terminal input and prompt availability.
+
+`--color=auto` uses supported output terminals. `--non-interactive`, a nonempty
+`CI` or `NO_COLOR`, and `TERM=dumb` disable automatic color. Unix terminals need
+a recognized ANSI color terminal type in `TERM`; empty or unknown types use
+plain text. Windows consoles need virtual-terminal processing already enabled;
+SPAS leaves console modes unchanged. `--color=always` overrides automatic policy
+and emits color in redirected human output. `--color=never` disables color.
+Invalid values return usage exit code 2. See the [NO_COLOR convention](https://no-color.org/).
+
+JSON, shell-completion scripts and requests, `status --short`, and
+`diff --name-only` remain plain for every color setting. Git diffs receive the
+stdout color policy explicitly because forwarded pipes do not establish native
+terminal attachment. Results stay on stdout; warnings and errors stay on stderr.
+Color supplements readable labels. Terminal progress animation is pending.
 
 ---
 

@@ -261,6 +261,14 @@ control. An interrupted push retains recovery state for the next `spas sync`.
 
 For complete details on all flags, exit codes, and policies, consult the [Command Reference](https://github.com/getspas/spas/wiki/Command-reference).
 
+Human output uses `--color=auto` by default, with separate capability checks for
+stdout and stderr. Automatic color is disabled for redirected destinations,
+non-interactive execution, CI, nonempty `NO_COLOR`, and unsupported terminals.
+Use `--color=always` to request color explicitly or `--color=never` for plain
+output. JSON, shell completion, `status --short`, and `diff --name-only` stay
+plain. Windows consoles require virtual-terminal processing already enabled;
+SPAS leaves console modes unchanged. Progress animation is pending.
+
 ---
 
 ## Documentation & Community

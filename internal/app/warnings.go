@@ -9,6 +9,7 @@ import (
 	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/provider"
 )
 
@@ -19,7 +20,7 @@ func (a App) warn(warning jsonoutput.Warning) error {
 	if a.JSON {
 		return jsonoutput.WriteWarning(a.Err, warning)
 	}
-	_, err := fmt.Fprintln(a.Err, "warning:", warning.Message)
+	_, err := fmt.Fprintln(a.Err, a.Presenter.Err("warning:", presentation.Warning), warning.Message)
 	return err
 }
 

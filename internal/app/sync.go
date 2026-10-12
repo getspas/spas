@@ -22,6 +22,7 @@ import (
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/publicgit"
@@ -3187,7 +3188,7 @@ func (a App) approveCommit(ctx context.Context, changes []plannedChange, supplie
 			fmt.Errorf("local managed asset changes require approval to commit %s to the linked repository; provide --message", joinPaths(paths)),
 		)
 	}
-	if _, err := fmt.Fprintln(a.Out, "Local managed asset changes require one commit in the linked repository:"); err != nil {
+	if _, err := fmt.Fprintln(a.Out, a.Presenter.Out("Local managed asset changes require one commit in the linked repository:", presentation.Result)); err != nil {
 		return "", err
 	}
 	for _, change := range changes {

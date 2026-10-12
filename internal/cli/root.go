@@ -20,6 +20,7 @@ import (
 	"github.com/getspas/spas/internal/interaction"
 	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/spaserr"
 	"github.com/getspas/spas/internal/version"
@@ -31,6 +32,8 @@ type rootOptions struct {
 	nonInteractive bool
 	yes            bool
 	json           bool
+	color          presentation.ColorMode
+	presenter      presentation.Presenter
 	gitPath        string
 	verbose        bool
 	timeout        time.Duration
@@ -41,7 +44,7 @@ func Execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	root := NewRootContext(ctx, os.Stdin, os.Stdout, os.Stderr)
-	err := root.Execute()
+	command, err := root.ExecuteC()
 	options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
 	if options != nil && options.cancel != nil {
 		options.cancel()
@@ -65,7 +68,8 @@ func Execute() int {
 				_ = jsonoutput.WriteError(root.ErrOrStderr(), errorCode(err), err.Error())
 			}
 		} else {
-			_, _ = fmt.Fprintln(root.ErrOrStderr(), "error:", err)
+			configurePresentation(command, options)
+			_, _ = fmt.Fprintln(root.ErrOrStderr(), options.presenter.Err("error:", presentation.Error), err)
 		}
 		return exitCode(err)
 	}
@@ -115,11 +119,18 @@ beforehand: default OpenSSH uses BatchMode and Git Credential Manager disables
 interaction. Custom SSH commands and credential helpers must be configured
 for unattended use; SPAS cannot control arbitrary helper interfaces. Use
 --timeout to bound execution; there is no default deadline. SPAS does not
-change global Git or SSH configuration.`,
+change global Git or SSH configuration.
+
+--color=auto styles human output on supported destination terminals. Automatic
+color is disabled by --non-interactive, CI, nonempty NO_COLOR, and unsupported
+terminals. --color=always overrides automatic policy; --color=never disables color.
+JSON, shell completion, status --short, and diff --name-only remain plain.
+Windows consoles require virtual-terminal processing already enabled.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Version,
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			configurePresentation(command, options)
 			if err := command.ValidateFlagGroups(); err != nil {
 				return spaserr.Wrap(spaserr.KindInvalidUsage, err)
 			}
@@ -134,7 +145,7 @@ change global Git or SSH configuration.`,
 				timeoutCtx, options.cancel = context.WithTimeout(command.Context(), options.timeout)
 				command.SetContext(timeoutCtx)
 			}
-			if !options.verbose || options.json {
+			if !options.verbose || machineOutput(command, options) {
 				return nil
 			}
 			repository := options.repo
@@ -147,7 +158,8 @@ change global Git or SSH configuration.`,
 			}
 			_, err := fmt.Fprintf(
 				command.ErrOrStderr(),
-				"spas: command=%s repo=%q git=%q\n",
+				"%s command=%s repo=%q git=%q\n",
+				options.presenter.Err("spas:", presentation.Result),
 				command.Name(),
 				repository,
 				gitPath,
@@ -167,6 +179,7 @@ change global Git or SSH configuration.`,
 	root.PersistentFlags().BoolVar(&options.nonInteractive, "non-interactive", false, "disable SPAS and supported Git authentication prompts; fail when a required choice is missing")
 	root.PersistentFlags().BoolVarP(&options.yes, "yes", "y", false, "accept recommended non-destructive setup confirmations")
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
+	root.PersistentFlags().Var(&options.color, "color", "color output: auto, always, or never (machine output stays plain)")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
 	root.PersistentFlags().BoolVarP(&options.verbose, "verbose", "v", false, "show additional diagnostics without file contents")
 	root.PersistentFlags().DurationVar(&options.timeout, "timeout", 0, "maximum duration for command execution (default: no timeout)")
@@ -663,7 +676,7 @@ func newVersionCommand(root *rootOptions) *cobra.Command {
 					"date":    version.Date,
 				})
 			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "spas %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
+			_, err := fmt.Fprintf(command.OutOrStdout(), "%s %s (commit %s, built %s)\n", root.presenter.Out("spas", presentation.Result), version.Version, version.Commit, version.Date)
 			return err
 		},
 	}
@@ -711,16 +724,38 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 		git.Stderr = command.ErrOrStderr()
 	}
 	return app.App{
-		Git:      git,
-		Store:    linkstate.Store{ConfigDir: dirs.Config, DataDir: dirs.Data},
-		Prompt:   prompt,
-		Out:      command.OutOrStdout(),
-		Err:      command.ErrOrStderr(),
-		RepoHint: repoHint,
-		PathBase: pathBase,
-		JSON:     options.json,
-		Provider: githubref.Provider{},
+		Presenter: options.presenter,
+		Git:       git,
+		Store:     linkstate.Store{ConfigDir: dirs.Config, DataDir: dirs.Data},
+		Prompt:    prompt,
+		Out:       command.OutOrStdout(),
+		Err:       command.ErrOrStderr(),
+		RepoHint:  repoHint,
+		PathBase:  pathBase,
+		JSON:      options.json,
+		Provider:  githubref.Provider{},
 	}, nil
+}
+
+func configurePresentation(command *cobra.Command, options *rootOptions) {
+	options.presenter = presentation.New(options.color, options.nonInteractive, machineOutput(command, options), command.OutOrStdout(), command.ErrOrStderr())
+}
+
+func machineOutput(command *cobra.Command, options *rootOptions) bool {
+	if options.json {
+		return true
+	}
+	switch command.Name() {
+	case "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+		return true
+	case "status":
+		short, _ := command.Flags().GetBool("short")
+		return short
+	case "diff":
+		nameOnly, _ := command.Flags().GetBool("name-only")
+		return nameOnly
+	}
+	return false
 }
 
 func classifyExecutionError(err error) error {

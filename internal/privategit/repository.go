@@ -624,8 +624,9 @@ func (r Repository) StreamStagedDiff(
 	stat bool,
 	paths []pathmodel.Path,
 	output io.Writer,
+	color string,
 ) error {
-	args := r.safeArgs("--literal-pathspecs", "--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--cached")
+	args := r.safeArgs("--literal-pathspecs", "--no-pager", "diff", "--color="+color, "--no-ext-diff", "--no-textconv", "--cached")
 	if stat {
 		args = append(args, "--stat")
 	}

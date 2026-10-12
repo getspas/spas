@@ -53,7 +53,7 @@ func TestPublicRepositoryCLIWarningStreams(t *testing.T) {
 	for _, jsonMode := range []bool{false, true} {
 		args := []string{"link", "getspas/assets", "--branch", "main", "--non-interactive", "--repo", workspace}
 		if jsonMode {
-			args = append(args, "--json")
+			args = append(args, "--json", "--color=always")
 		}
 		// Unlink between cases; no assets or checkout are removed.
 		if jsonMode {
@@ -99,6 +99,30 @@ func TestPublicRepositoryCLIWarningStreams(t *testing.T) {
 		t.Fatalf("sync missing commit approval: code %d, stdout %s, stderr %s", code, out, stderr)
 	}
 	assertVisibilityJSONStreams(t, out, stderr, true, "decision_required")
+	code, out, stderr = executeCaptured(t, []string{"sync", "--repo", workspace, "--color=always", "--existing-exclude", "preserve", "--merge-protection", "skip"})
+	if code != 4 || !bytes.Contains(stderr, []byte("\x1b[33mwarning:\x1b[0m")) || !bytes.Contains(stderr, []byte("\x1b[31merror:\x1b[0m")) {
+		t.Fatalf("colored warning and error: code %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	code, out, stderr = executeCaptured(t, []string{"status", "--repo", workspace, "--color=always"})
+	if code != 0 || !bytes.Contains(out, []byte("\x1b[36mLink:\x1b[0m")) || len(stderr) != 0 {
+		t.Fatalf("colored status: code %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	for _, args := range [][]string{
+		{"status", "--short"}, {"diff", "--name-only"}, {"status", "--json"},
+	} {
+		args = append(args, "--repo", workspace, "--color=always")
+		code, out, stderr = executeCaptured(t, args)
+		if code != 0 || bytes.Contains(out, []byte("\x1b")) || bytes.Contains(stderr, []byte("\x1b")) {
+			t.Fatalf("machine output %v: code %d, stdout %q, stderr %q", args, code, out, stderr)
+		}
+	}
+	git("config", "--file", config, "color.ui", "always")
+	for _, color := range []string{"auto", "always", "never"} {
+		code, out, stderr = executeCaptured(t, []string{"diff", "--repo", workspace, "--color=" + color})
+		if code != 0 || !bytes.Contains(out, []byte("new work")) || bytes.Contains(out, []byte("\x1b")) != (color == "always") || bytes.Contains(stderr, []byte("\x1b")) {
+			t.Fatalf("Git diff %s: code %d, stdout %q, stderr %q", color, code, out, stderr)
+		}
+	}
 }
 
 func assertVisibilityJSONStreams(t *testing.T, out, stderr []byte, failed bool, errorCode string) {

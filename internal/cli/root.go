@@ -33,6 +33,7 @@ type rootOptions struct {
 	yes            bool
 	json           bool
 	color          presentation.ColorMode
+	progress       presentation.ProgressMode
 	presenter      presentation.Presenter
 	gitPath        string
 	verbose        bool
@@ -125,7 +126,12 @@ change global Git or SSH configuration.
 color is disabled by --non-interactive, CI, nonempty NO_COLOR, and unsupported
 terminals. --color=always overrides automatic policy; --color=never disables color.
 JSON, shell completion, status --short, and diff --name-only remain plain.
-Windows consoles require virtual-terminal processing already enabled.`,
+Windows consoles require virtual-terminal processing already enabled.
+
+--progress=auto shows real phases on supported stderr terminals, independently
+of color and NO_COLOR. --progress=never disables motion. Non-interactive, CI,
+redirected, unsupported, and machine output has no progress. Prompts and Git
+output suspend motion; progress is cleared when the command finishes.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Version,
@@ -180,6 +186,7 @@ Windows consoles require virtual-terminal processing already enabled.`,
 	root.PersistentFlags().BoolVarP(&options.yes, "yes", "y", false, "accept recommended non-destructive setup confirmations")
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
 	root.PersistentFlags().Var(&options.color, "color", "color output: auto, always, or never (machine output stays plain)")
+	root.PersistentFlags().Var(&options.progress, "progress", "phase progress: auto or never (default: auto)")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
 	root.PersistentFlags().BoolVarP(&options.verbose, "verbose", "v", false, "show additional diagnostics without file contents")
 	root.PersistentFlags().DurationVar(&options.timeout, "timeout", 0, "maximum duration for command execution (default: no timeout)")
@@ -196,6 +203,17 @@ Windows consoles require virtual-terminal processing already enabled.`,
 		newVersionCommand(options),
 	)
 	for _, command := range root.Commands() {
+		if run := command.RunE; run != nil {
+			command.RunE = func(cmd *cobra.Command, args []string) error {
+				defer func() {
+					options.presenter.Stop()
+					if options.cancel != nil {
+						options.cancel()
+					}
+				}()
+				return run(cmd, args)
+			}
+		}
 		if command.Args == nil {
 			continue
 		}
@@ -704,6 +722,9 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	nonInteractive := options.nonInteractive || options.json
 	prompt := interaction.Detect(command.InOrStdin(), command.ErrOrStderr(), nonInteractive)
 	prompt.AssumeYes = options.yes
+	options.presenter.StartProgress(command.Context(), options.progress, options.nonInteractive, machineOutput(command, options), command.ErrOrStderr())
+	prompt.Out = options.presenter.Writer(prompt.Out)
+	prompt.Before = func() func() { return options.presenter.Pause(false) }
 	gitPath := options.gitPath
 	if strings.ContainsRune(gitPath, '/') || strings.ContainsRune(gitPath, filepath.Separator) || filepath.VolumeName(gitPath) != "" {
 		gitPath, err = filepath.Abs(gitPath)
@@ -718,18 +739,19 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 		// own unattended configuration; a timeout bounds command execution.
 		NonInteractive: !prompt.Interactive,
 		Stdin:          command.InOrStdin(),
+		BeforeTerminal: func() func() { return options.presenter.Pause(true) },
 	}
 	if !options.json {
-		git.Stdout = command.OutOrStdout()
-		git.Stderr = command.ErrOrStderr()
+		git.Stdout = options.presenter.Writer(command.OutOrStdout())
+		git.Stderr = options.presenter.Writer(command.ErrOrStderr())
 	}
 	return app.App{
 		Presenter: options.presenter,
 		Git:       git,
 		Store:     linkstate.Store{ConfigDir: dirs.Config, DataDir: dirs.Data},
 		Prompt:    prompt,
-		Out:       command.OutOrStdout(),
-		Err:       command.ErrOrStderr(),
+		Out:       options.presenter.Writer(command.OutOrStdout()),
+		Err:       options.presenter.Writer(command.ErrOrStderr()),
 		RepoHint:  repoHint,
 		PathBase:  pathBase,
 		JSON:      options.json,

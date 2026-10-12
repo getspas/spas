@@ -69,6 +69,8 @@ type fileSnapshot struct {
 }
 
 func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
+	a.Presenter.Phase("Checking synchronization state", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -140,6 +142,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			return err
 		}
 	}
+	a.Presenter.Phase("Validating asset checkout", -1)
 	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
@@ -207,6 +210,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		}
 	}
 
+	a.Presenter.Phase("Fetching assets", -1)
 	previouslyEmpty := state.Private.RemoteEmpty
 	remoteBranchExists, err := private.RemoteBranchExists(ctx, state.Private.Branch)
 	if err != nil {
@@ -225,6 +229,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		}
 	}
 
+	a.Presenter.Phase("Inspecting workspace assets", len(state.ManagedPaths)+len(state.PendingAdds))
 	localPrivatePaths, err := private.TrackedPaths(ctx)
 	if err != nil {
 		return err
@@ -553,6 +558,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 	if err := verifyApprovedSnapshots(repository.Root, changes, snapshots); err != nil {
 		return err
 	}
+	a.Presenter.Phase("Staging asset changes", len(changes))
 	addOrModify, removals, err := applyLocalChanges(repository.Root, private.Path, changes)
 	if err != nil {
 		return err
@@ -573,6 +579,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if err := a.ensurePrivateIdentity(ctx, repository, private); err != nil {
 			return err
 		}
+		a.Presenter.Phase("Committing asset changes", len(changes))
 		if err := private.Commit(ctx, message); err != nil {
 			return err
 		}
@@ -594,6 +601,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		unionSets(skipped, stringSet(pathsToStrings(plan.DeferredRemovals))),
 	)
 	for attempt := 1; ; attempt++ {
+		a.Presenter.Phase("Reconciling asset history", -1)
 		preMergeHead, err := private.Head(ctx)
 		if err != nil {
 			return err
@@ -829,6 +837,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		if err := private.VerifyOrigin(ctx, remoteURL); err != nil {
 			return err
 		}
+		a.Presenter.Phase("Pushing assets", -1)
 		err = private.Push(ctx, state.Private.Branch)
 		if err == nil {
 			state.Materializing.Phase = linkstate.MaterializationPushed
@@ -844,6 +853,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 			if saveErr := a.Store.Save(state); saveErr != nil {
 				return fmt.Errorf("save remote-advanced pending push state: %w", saveErr)
 			}
+			a.Presenter.Phase("Fetching concurrent asset updates", -1)
 			if err := private.Fetch(ctx, state.Private.Branch); err != nil {
 				return err
 			}
@@ -859,6 +869,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 
 	// The exclude block is written and proven effective before any private
 	// content reaches the public working tree.
+	a.Presenter.Phase("Verifying asset exclusions", len(finalExclude))
 	finalExcludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, finalExclude)
 	if err != nil {
 		return err
@@ -898,6 +909,7 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 		}
 	}
 
+	a.Presenter.Phase("Materializing assets", len(finalPaths))
 	materializationSnapshots := snapshotsForOverrideReplacements(
 		mergeFileSnapshots(snapshots, overrideSnapshots),
 		overrideSnapshots,
@@ -967,6 +979,7 @@ func (a App) initializePrivateRepository(
 	remoteURL string,
 	requestedBranch string,
 ) error {
+	a.Presenter.Phase("Initializing asset checkout", -1)
 	if requestedBranch != "" && state.Private.Branch != "" && requestedBranch != state.Private.Branch {
 		return fmt.Errorf("private branch is already fixed to %q", state.Private.Branch)
 	}
@@ -1315,6 +1328,7 @@ func (a App) resumeMaterialization(
 	if marker == nil {
 		return nil
 	}
+	a.Presenter.Phase("Recovering synchronization", -1)
 	if !state.Private.Initialized {
 		return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("pending private result has no initialized private clone"))
 	}
@@ -1388,6 +1402,7 @@ func (a App) resumeMaterialization(
 		return err
 	}
 	if marker.Phase == linkstate.MaterializationPushPending {
+		a.Presenter.Phase("Resuming asset push", -1)
 		if err := private.Push(ctx, state.Private.Branch); err != nil {
 			if privategit.IsNonFastForward(err) {
 				marker.Phase = linkstate.MaterializationRemoteAdvanced
@@ -1457,6 +1472,7 @@ func (a App) resumeMaterialization(
 		stringsToPaths(marker.PreviousPaths),
 		stringsToPaths(marker.ExcludedPaths),
 	)
+	a.Presenter.Phase("Recovering workspace assets", len(finalPaths))
 	recoveryPlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, recoveryExclude)
 	if err != nil {
 		return err
@@ -2122,6 +2138,7 @@ func (a App) ensurePrivateIdentity(ctx context.Context, public publicgit.Reposit
 }
 
 func (a App) continueSync(ctx context.Context, repository publicgit.Repository, state *linkstate.State, options SyncOptions) (returnErr error) {
+	a.Presenter.Phase("Continuing asset merge", -1)
 	if !state.Private.Initialized {
 		return fmt.Errorf("private repository is not initialized")
 	}
@@ -2561,6 +2578,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 	if err := a.Store.Save(*state); err != nil {
 		return fmt.Errorf("save pending private push state: %w", err)
 	}
+	a.Presenter.Phase("Pushing resolved assets", -1)
 	if err := private.Push(ctx, state.Private.Branch); err != nil {
 		return err
 	}
@@ -2629,6 +2647,7 @@ func (a App) continueSync(ctx context.Context, repository publicgit.Repository, 
 			return err
 		}
 	}
+	a.Presenter.Phase("Materializing resolved assets", len(finalPaths))
 	materializationSnapshots := snapshotsForOverrideReplacements(
 		mergeFileSnapshots(snapshots, overrideSnapshots),
 		overrideSnapshots,
@@ -2769,6 +2788,7 @@ func verifyPrivateAbortSource(ctx context.Context, private privategit.Repository
 }
 
 func (a App) abortSync(ctx context.Context, repository publicgit.Repository, state *linkstate.State) (returnErr error) {
+	a.Presenter.Phase("Aborting asset merge", -1)
 	if !state.Private.Initialized {
 		return fmt.Errorf("private repository is not initialized")
 	}

@@ -336,7 +336,11 @@ func TestGitExecHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		defer l.Release()
-		if err := os.WriteFile(filepath.Join(dir, "ready"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		ready := filepath.Join(dir, "ready")
+		if err := os.WriteFile(ready+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(3)
+		}
+		if err := os.Rename(ready+".tmp", ready); err != nil {
 			os.Exit(3)
 		}
 		time.Sleep(time.Minute)

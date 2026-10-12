@@ -1,4 +1,4 @@
-// Package presentation owns human-readable terminal styling.
+// Package presentation owns human-readable terminal styling and progress.
 package presentation
 
 import (
@@ -40,11 +40,12 @@ const (
 	Error
 )
 
-// Presenter styles SPAS text without wrapping streams used by prompts or Git.
+// Presenter coordinates SPAS text, prompts, and forwarded Git output.
 // Its zero value produces plain text.
 type Presenter struct {
 	outColor bool
 	errColor bool
+	progress *progress
 }
 
 func New(mode ColorMode, nonInteractive, machine bool, out, errOut io.Writer) Presenter {

@@ -25,6 +25,7 @@ func (a App) warn(warning jsonoutput.Warning) error {
 }
 
 func (a App) warnPublicRepository(ctx context.Context, ref provider.RepositoryRef) error {
+	a.Presenter.Phase("Checking repository visibility", -1)
 	readable, err := a.Provider.ProbePublic(ctx, a.Git, ref)
 	if err != nil {
 		return err

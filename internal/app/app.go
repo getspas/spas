@@ -70,6 +70,8 @@ type LinkOptions struct {
 }
 
 func (a App) Link(ctx context.Context, options LinkOptions) error {
+	a.Presenter.Phase("Checking project workspace", -1)
+	defer a.Presenter.Stop()
 	repository, err := a.publicRepository(ctx)
 	if err != nil {
 		return err
@@ -172,6 +174,8 @@ type AddOptions struct {
 }
 
 func (a App) Add(ctx context.Context, options AddOptions) error {
+	a.Presenter.Phase("Selecting assets", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -384,6 +388,8 @@ type RemoveOptions struct {
 }
 
 func (a App) Remove(ctx context.Context, options RemoveOptions) error {
+	a.Presenter.Phase("Planning asset removal", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -621,6 +627,8 @@ type Status struct {
 }
 
 func (a App) Status(ctx context.Context, options StatusOptions) error {
+	a.Presenter.Phase("Inspecting managed assets", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -733,6 +741,7 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if a.JSON {
 		return a.write(status)
 	}
+	a.Presenter.Stop()
 	if options.Short {
 		_, err := fmt.Fprintf(a.Out, "linked=%t initialized=%t managed=%d modified=%d missing=%d conflicts=%d pending_recovery=%t\n",
 			status.Linked,
@@ -807,6 +816,8 @@ type UnlinkOptions struct {
 }
 
 func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
+	a.Presenter.Phase("Checking unlink safeguards", -1)
+	defer a.Presenter.Stop()
 	if (options.ApproveRemoveFiles || options.DiscardUnsyncedChanges) && !options.RemoveFiles {
 		return spaserr.Wrap(spaserr.KindInvalidUsage, fmt.Errorf("--approve-remove-files and --discard-unsynced-changes require --remove-files"))
 	}
@@ -916,6 +927,7 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 		// Remove files before metadata. If a later unlink step fails, the link
 		// and its exclusions remain recoverable and a subsequent sync can
 		// restore files that already existed in the private repository.
+		a.Presenter.Phase("Removing workspace assets", len(removePaths))
 		for _, path := range removePaths {
 			if err := context.Cause(ctx); err != nil {
 				return err
@@ -1295,6 +1307,7 @@ func (a App) warnf(format string, arguments ...any) error {
 }
 
 func (a App) write(value any) error {
+	a.Presenter.Stop()
 	if a.JSON {
 		return jsonoutput.Write(a.Out, value)
 	}

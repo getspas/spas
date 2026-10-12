@@ -33,6 +33,8 @@ type DiffOptions struct {
 }
 
 func (a App) Diff(ctx context.Context, options DiffOptions) error {
+	a.Presenter.Phase("Comparing asset contents", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -120,6 +122,7 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 }
 
 func (a App) diffFiles(ctx context.Context, root, oldFile, newFile string, stat bool) error {
+	a.Presenter.Stop()
 	args := []string{"--no-pager", "diff", "--color=" + a.Presenter.GitColor(), "--no-ext-diff", "--no-textconv", "--no-index"}
 	if stat {
 		args = append(args, "--stat")
@@ -273,6 +276,8 @@ type DoctorCheck struct {
 }
 
 func (a App) Doctor(ctx context.Context) error {
+	a.Presenter.Phase("Checking workspace health", -1)
+	defer a.Presenter.Stop()
 	result := DoctorResult{SchemaVersion: jsonoutput.SchemaVersion, Healthy: true}
 	add := func(name, status, message string) {
 		result.Checks = append(result.Checks, DoctorCheck{Name: name, Status: status, Message: message})
@@ -523,6 +528,7 @@ func (a App) Doctor(ctx context.Context) error {
 }
 
 func (a App) renderDoctorResult(result DoctorResult) error {
+	a.Presenter.Stop()
 	if a.JSON {
 		if err := a.write(result); err != nil {
 			return err

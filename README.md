@@ -267,7 +267,14 @@ non-interactive execution, CI, nonempty `NO_COLOR`, and unsupported terminals.
 Use `--color=always` to request color explicitly or `--color=never` for plain
 output. JSON, shell completion, `status --short`, and `diff --name-only` stay
 plain. Windows consoles require virtual-terminal processing already enabled;
-SPAS leaves console modes unchanged. Progress animation is pending.
+SPAS leaves console modes unchanged.
+
+`--progress=auto` shows real phases and available file counts on supported
+stderr terminals. `--progress=never` disables motion. Progress is independent
+of color and `NO_COLOR`, and commands with complete inputs can show it.
+Non-interactive, CI, redirected stderr, unsupported terminals, and machine
+output have no progress. Prompts suspend animation; Git output uses a stable
+phase line. SPAS clears progress on completion, failure, timeout, or cancellation.
 
 ---
 

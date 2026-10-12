@@ -61,6 +61,9 @@ func TestGitProxyPreservesOptionsAndExitStatus(t *testing.T) {
 func runGitProxy() int {
 	args := os.Args[1:]
 	mode := os.Getenv("SPAS_APP_GIT_PROXY")
+	if mode == "slow-inspection" && containsArgument(args, "ls-files") {
+		time.Sleep(350 * time.Millisecond)
+	}
 	if (mode == "stall-push" || mode == "auth-fail-push") && containsArgument(args, "push") {
 		if mode == "auth-fail-push" {
 			_, _ = fmt.Fprintln(os.Stderr, "controlled authentication failure: provision unattended credentials")

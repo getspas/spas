@@ -14,6 +14,7 @@ The following flags apply to all SPAS commands:
 | `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
 | `--non-interactive` | Flag | Disable SPAS and supported Git authentication prompts; fail if a required decision is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
+| `--progress MODE` | `auto` \| `never` | Select phase progress on stderr (default: `auto`) |
 | `--color MODE` | `auto` \| `always` \| `never` | Select terminal color (default: `auto`); machine output stays plain |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
@@ -41,7 +42,22 @@ JSON, shell-completion scripts and requests, `status --short`, and
 `diff --name-only` remain plain for every color setting. Git diffs receive the
 stdout color policy explicitly because forwarded pipes do not establish native
 terminal attachment. Results stay on stdout; warnings and errors stay on stderr.
-Color supplements readable labels. Terminal progress animation is pending.
+Color supplements readable labels.
+
+`--progress=auto` animates real phases and available file counts on supported
+stderr terminals. Fast operations finish before animation appears. Progress
+is independent of color, `NO_COLOR`, and prompt availability. It is disabled
+for `--non-interactive`, CI, redirected stderr, unsupported/dumb terminals,
+JSON, completion, `status --short`, and `diff --name-only`.
+`--progress=never` disables motion while retaining warnings and errors;
+invalid values return usage exit code 2.
+
+Transient progress stays on stderr and fits within its terminal width.
+Animation clears before prompts, diagnostics, and results. Streaming Git and
+remote operations use a stable phase line while the child runs. Motion resumes
+after terminal ownership returns and clears on success, failure, timeout, or
+cancellation. SPAS leaves cursor visibility, input mode, and console modes
+unchanged.
 
 ---
 

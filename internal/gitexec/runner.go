@@ -20,6 +20,8 @@ type Runner struct {
 	Stdin          io.Reader
 	Stdout         io.Writer
 	Stderr         io.Writer
+	// BeforeTerminal suspends presentation through child exit and stream draining.
+	BeforeTerminal func() func()
 	// NoLazyFetch is enabled only for the SPAS-managed full private clone.
 	// Public repositories may be partial clones whose ordinary reads need to
 	// retrieve missing promisor objects.
@@ -86,6 +88,11 @@ func (r Runner) run(ctx context.Context, dir string, stream bool, args ...string
 }
 
 func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input io.Reader, args ...string) (Result, error) {
+	operation := operationName(args)
+	remote := remoteOperation(operation)
+	if r.BeforeTerminal != nil && (stream || remote) {
+		defer r.BeforeTerminal()()
+	}
 	if r.NonInteractive {
 		var err error
 		args, err = r.unattendedArgs(ctx, dir, args)
@@ -326,9 +333,7 @@ func (r Runner) commandEnvironment(environment []string) []string {
 // for unattended use by their owner.
 func (r Runner) unattendedArgs(ctx context.Context, dir string, args []string) ([]string, error) {
 	operation := operationName(args)
-	switch operation {
-	case "clone", "fetch", "push", "ls-remote", "credential":
-	default:
+	if !remoteOperation(operation) {
 		return args, nil
 	}
 	controls := []string{"-c", "credential.interactive=false"}
@@ -427,4 +432,13 @@ func ExitCode(err error) (int, bool) {
 		return 0, false
 	}
 	return exitErr.ExitCode, true
+}
+
+func remoteOperation(operation string) bool {
+	switch operation {
+	case "clone", "fetch", "push", "ls-remote", "credential":
+		return true
+	default:
+		return false
+	}
 }

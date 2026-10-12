@@ -114,6 +114,14 @@ npx -y markdownlint-cli2 "**/*.md"
 
 CI runs full test suites natively across Linux, macOS, and Windows (`amd64` and `arm64`), followed by cross-compilation builds for all release targets with `CGO_ENABLED=0`.
 
+For native terminal checks on macOS and Linux, run
+`python3 scripts/ci/test-terminal.py` with Python 3.9 or newer. The harness builds
+local test binaries and verifies phases, counts, narrow terminals, stream
+redirection, prompt/Git ordering, timeout, and interruption using isolated
+repositories. It prints the temporary directory containing transcripts.
+Native Windows console checks require running the compiled terminal tests
+from a supported Windows terminal; skipped tests do not establish capability.
+
 ---
 
 ## 6. Documentation Changes

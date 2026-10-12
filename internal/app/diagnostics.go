@@ -14,6 +14,7 @@ import (
 	"github.com/getspas/spas/internal/exclude"
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
@@ -271,7 +272,7 @@ type DoctorCheck struct {
 }
 
 func (a App) Doctor(ctx context.Context) error {
-	result := DoctorResult{SchemaVersion: JSONSchemaVersion, Healthy: true}
+	result := DoctorResult{SchemaVersion: jsonoutput.SchemaVersion, Healthy: true}
 	add := func(name, status, message string) {
 		result.Checks = append(result.Checks, DoctorCheck{Name: name, Status: status, Message: message})
 		switch status {

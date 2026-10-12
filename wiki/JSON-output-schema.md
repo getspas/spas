@@ -6,6 +6,9 @@ SPAS provides structured JSON output for all commands invoked with `--json`. You
 
 ## 1. Schema Versioning & Stability Contract
 
+See [schema contracts](Schemas) for the version inventory, compatibility and
+bump rules, and the separate persisted link-state contract.
+
 All JSON payloads emitted by SPAS include a root-level `"schemaVersion"` field:
 
 ```json
@@ -87,7 +90,7 @@ can survive unlink. Doctor and dry-run do not repair or emit this warning.
 {"schemaVersion":3,"warning":{"code":"exclusion_drift_repaired","message":"Reconciled unexpected changes to the owned exclusion block with link state."}}
 ```
 
-Schema 2 deliberately versions this change from schema 1's error-only stderr.
+Warning records were introduced in schema 2, replacing schema 1's error-only stderr.
 Other result and error keys retain their existing shapes.
 
 ---

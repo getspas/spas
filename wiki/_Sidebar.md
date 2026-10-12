@@ -5,6 +5,7 @@
 - [Quick Start](Quick-start)
 - [Command Reference](Command-reference)
 - [JSON Output Schema](JSON-output-schema)
+- [Schema Contracts](Schemas)
 - [Troubleshooting](Troubleshooting)
 - [Safety & Limitations](Safety-and-limitations)
 

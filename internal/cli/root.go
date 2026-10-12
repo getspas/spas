@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/githubref"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/spaserr"
@@ -62,15 +62,7 @@ func Execute() int {
 		}
 		if jsonMode {
 			if !reported {
-				payload := map[string]any{
-					"code":    errorCode(err),
-					"message": err.Error(),
-				}
-				_ = json.NewEncoder(root.ErrOrStderr()).Encode(map[string]any{
-					"schemaVersion": app.JSONSchemaVersion,
-					"ok":            false,
-					"error":         payload,
-				})
+				_ = jsonoutput.WriteError(root.ErrOrStderr(), errorCode(err), err.Error())
 			}
 		} else {
 			_, _ = fmt.Fprintln(root.ErrOrStderr(), "error:", err)
@@ -657,13 +649,10 @@ func newVersionCommand(root *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			if root.json {
-				encoder := json.NewEncoder(command.OutOrStdout())
-				encoder.SetEscapeHTML(false)
-				return encoder.Encode(map[string]any{
-					"schemaVersion": app.JSONSchemaVersion,
-					"version":       version.Version,
-					"commit":        version.Commit,
-					"date":          version.Date,
+				return jsonoutput.Write(command.OutOrStdout(), map[string]any{
+					"version": version.Version,
+					"commit":  version.Commit,
+					"date":    version.Date,
 				})
 			}
 			_, err := fmt.Fprintf(command.OutOrStdout(), "spas %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)

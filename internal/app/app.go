@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
@@ -29,8 +29,6 @@ import (
 )
 
 var removePrivateClone = os.RemoveAll
-
-const JSONSchemaVersion = 3
 
 type App struct {
 	Git      gitexec.Runner
@@ -634,7 +632,7 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 		return err
 	}
 	status := Status{
-		SchemaVersion:       JSONSchemaVersion,
+		SchemaVersion:       jsonoutput.SchemaVersion,
 		Linked:              true,
 		LinkID:              state.LinkID,
 		PublicBranch:        branch,
@@ -1303,14 +1301,7 @@ func (a App) warnf(format string, arguments ...any) error {
 
 func (a App) write(value any) error {
 	if a.JSON {
-		if typed, ok := value.(map[string]any); ok {
-			if _, exists := typed["schemaVersion"]; !exists {
-				typed["schemaVersion"] = JSONSchemaVersion
-			}
-		}
-		encoder := json.NewEncoder(a.Out)
-		encoder.SetEscapeHTML(false)
-		return encoder.Encode(value)
+		return jsonoutput.Write(a.Out, value)
 	}
 	switch typed := value.(type) {
 	case map[string]any:
@@ -1326,7 +1317,7 @@ func (a App) write(value any) error {
 			}
 		}
 	default:
-		return json.NewEncoder(a.Out).Encode(value)
+		return jsonoutput.Write(a.Out, value)
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/spaserr"
 )
 
@@ -104,8 +105,8 @@ func TestExclusionRepairWarnings(t *testing.T) {
 					if wantWarning {
 						if jsonMode {
 							var record struct {
-								SchemaVersion int     `json:"schemaVersion"`
-								Warning       Warning `json:"warning"`
+								SchemaVersion int                `json:"schemaVersion"`
+								Warning       jsonoutput.Warning `json:"warning"`
 							}
 							if err := json.Unmarshal(stderr.Bytes(), &record); err != nil || record.SchemaVersion != 3 || record.Warning.Code != "exclusion_drift_repaired" {
 								t.Fatalf("warning = %s, %v", stderr.String(), err)
@@ -174,7 +175,7 @@ func TestExclusionRepairWarningBeforeEffectiveExclusionFailure(t *testing.T) {
 		t.Fatalf("Add() = %v", err)
 	}
 	var record struct {
-		Warning Warning `json:"warning"`
+		Warning jsonoutput.Warning `json:"warning"`
 	}
 	if err := json.Unmarshal(stderr.Bytes(), &record); err != nil || record.Warning.Code != "exclusion_drift_repaired" || out.Len() != 0 {
 		t.Fatalf("failure streams: stdout %q, stderr %q, %v", out.String(), stderr.String(), err)

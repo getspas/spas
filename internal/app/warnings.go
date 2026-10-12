@@ -2,31 +2,22 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/getspas/spas/internal/exclude"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/provider"
 )
 
-// Warning carries a stable machine code and a readable diagnostic.
-type Warning struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func (a App) warn(warning Warning) error {
+func (a App) warn(warning jsonoutput.Warning) error {
 	if a.Err == nil {
 		return nil
 	}
 	if a.JSON {
-		return json.NewEncoder(a.Err).Encode(struct {
-			SchemaVersion int     `json:"schemaVersion"`
-			Warning       Warning `json:"warning"`
-		}{JSONSchemaVersion, warning})
+		return jsonoutput.WriteWarning(a.Err, warning)
 	}
 	_, err := fmt.Fprintln(a.Err, "warning:", warning.Message)
 	return err
@@ -40,7 +31,7 @@ func (a App) warnPublicRepository(ctx context.Context, ref provider.RepositoryRe
 	if !readable {
 		return nil
 	}
-	return a.warn(Warning{
+	return a.warn(jsonoutput.Warning{
 		Code:    "public_repository",
 		Message: fmt.Sprintf("Repository %q is publicly readable. Anyone may read managed assets stored there.", ref.Canonical),
 	})
@@ -54,7 +45,7 @@ func (a App) applyExclusions(plan exclude.Plan, expected ...[]pathmodel.Path) er
 	if !repaired {
 		return nil
 	}
-	if err := a.warn(Warning{
+	if err := a.warn(jsonoutput.Warning{
 		Code:    "exclusion_drift_repaired",
 		Message: fmt.Sprintf("Reconciled unexpected changes to the owned exclusion block in %q with link state. Edit rules outside the SPAS block and avoid concurrent writes. Rules without exact ownership markers remain external and can survive unlink.", plan.Path),
 	}); err != nil {

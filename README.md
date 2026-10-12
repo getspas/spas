@@ -98,10 +98,10 @@ including file/directory conflicts, before applying assets; Git's
 
 The component limit of 255 bytes measured in NFC, independently of stored
 spelling, and the Windows 260-byte absolute-path preflight still
-apply; native length behavior remains pending. Development link-state schema 4
-records exact ownership replacements for recovery and rejects older schemas.
-Use the previous build to synchronize and unlink older development links before
-upgrading.
+apply; native length behavior remains pending. [Schema contracts](wiki/Schemas.md)
+document the independent persisted-state and CLI JSON versions. State records
+exact ownership replacements for recovery and accepts only its current version,
+without migration.
 
 ## Installation
 

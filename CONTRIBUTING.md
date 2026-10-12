@@ -35,7 +35,7 @@ SPAS is a command-line tool written in Go that enables developers to manage envi
 ```
 
 1. **Local Exclusion Layer:** SPAS manages an isolated `# BEGIN SPAS` / `# END SPAS` block in `.git/info/exclude` to keep assets untracked in the main repo without editing `.gitignore`.
-2. **Deterministic State Store (Schema 2):** Authoritative state binds the project workspace to a single linked GitHub repository and branch, enforcing strict head tracking (`Private.ExpectedHead`).
+2. **Deterministic State Store:** Authoritative state binds the project workspace to a single linked GitHub repository and branch, enforcing strict head tracking (`Private.ExpectedHead`). See [schema contracts](wiki/Schemas.md) for persisted-state and CLI JSON versions, compatibility, and bump rules.
 3. **9-Phase Synchronization Pipeline:** Acquires an advisory link lock, stages workspace snapshots, performs Git-native merge operations, pushes to GitHub, and materializes files via atomic renames (`/.spas-tmp/`).
 4. **Fail-Safe Recovery:** Journaled checkouts and live merge tracking (`ActiveMerge`) ensure no state is guessed or corrupted during unexpected process interruptions.
 

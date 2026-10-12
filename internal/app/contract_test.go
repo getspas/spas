@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/spaserr"
 )
@@ -440,7 +441,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v\n%s", err, output.String())
 	}
-	if status.SchemaVersion != JSONSchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
+	if status.SchemaVersion != jsonoutput.SchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
 		t.Fatalf("Status() = %#v", status)
 	}
 	if !reflect.DeepEqual(status.WorkspaceModified, []string{"docs/ARCHITECTURE.md"}) ||
@@ -468,8 +469,8 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &diff); err != nil {
 		t.Fatalf("decode diff: %v\n%s", err, output.String())
 	}
-	if diff.SchemaVersion != JSONSchemaVersion {
-		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, JSONSchemaVersion)
+	if diff.SchemaVersion != jsonoutput.SchemaVersion {
+		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, jsonoutput.SchemaVersion)
 	}
 	if !reflect.DeepEqual(diff.ChangedPaths, []string{"docs/ARCHITECTURE.md"}) {
 		t.Fatalf("Diff() changed paths = %v", diff.ChangedPaths)
@@ -483,7 +484,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if doctor.SchemaVersion != JSONSchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
+	if doctor.SchemaVersion != jsonoutput.SchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
 		t.Fatalf("Doctor() = %#v", doctor)
 	}
 
@@ -2071,8 +2072,8 @@ func assertJSONContract(t *testing.T, output []byte, wantKeys []string) map[stri
 	if !reflect.DeepEqual(gotKeys, sortedWant) {
 		t.Fatalf("JSON top-level keys = %v, want %v\npayload = %s", gotKeys, sortedWant, string(output))
 	}
-	if sv, ok := doc["schemaVersion"].(float64); !ok || int(sv) != JSONSchemaVersion {
-		t.Fatalf("schemaVersion = %v, want %d", doc["schemaVersion"], JSONSchemaVersion)
+	if sv, ok := doc["schemaVersion"].(float64); !ok || int(sv) != jsonoutput.SchemaVersion {
+		t.Fatalf("schemaVersion = %v, want %d", doc["schemaVersion"], jsonoutput.SchemaVersion)
 	}
 	return doc
 }

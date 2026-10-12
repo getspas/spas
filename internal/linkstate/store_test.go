@@ -357,6 +357,13 @@ func TestLoadRejectsTamperedSchemaPrivatePathsAndUnknownFields(t *testing.T) {
 			wantInError: "unsupported link-state schema",
 		},
 		{
+			name: "obsolete schema 3",
+			mutate: func(document map[string]any, _ State) {
+				document["schemaVersion"] = float64(3)
+			},
+			wantInError: "unsupported link-state schema",
+		},
+		{
 			name: "obsolete public approval",
 			mutate: func(document map[string]any, _ State) {
 				document["private"].(map[string]any)["publicApproved"] = true

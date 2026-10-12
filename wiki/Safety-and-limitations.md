@@ -125,8 +125,8 @@ nonzero and names the remaining checkout paths. The workspace remains unlinked.
 
 ## Development link-state compatibility
 
-Link-state schema 4 preserves exact path references and records the private
+Link state preserves exact path references and records the private
 replacement associated with each approved project ownership override. Recovery
 uses that recorded association rather than reconstructing it by case folding.
-Older development-state schemas are rejected without migration; synchronize and
-unlink using the previous build before upgrading.
+Only the current state schema is accepted, without migration. See
+[schema contracts](Schemas) for the current version and recovery field reference.

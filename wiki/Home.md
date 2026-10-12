@@ -23,6 +23,7 @@ SPAS keeps private and environment-specific assets in your local project workspa
 | **[Quick Start](Quick-start)** | Step-by-step walkthrough linking a workspace, managing assets, and syncing across developer machines. |
 | **[Command Reference](Command-reference)** | Detailed documentation of all commands (`link`, `add`, `remove`, `sync`, `status`, `diff`, `doctor`, `unlink`). |
 | **[JSON Output Schema](JSON-output-schema)** | Machine-readable JSON output schemas, error envelopes, and automation payloads. |
+| **[Schema Contracts](Schemas)** | Independent persisted-state and CLI JSON versions, compatibility policy, and recovery field reference. |
 | **[Troubleshooting](Troubleshooting)** | Practical solutions for common errors, conflict resolution procedures, and recovery flows. |
 | **[Safety & Limitations](Safety-and-limitations)** | Security boundaries, filesystem concurrency models, supported file modes, and resource limits. |
 

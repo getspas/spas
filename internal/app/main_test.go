@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -60,6 +61,17 @@ func TestGitProxyPreservesOptionsAndExitStatus(t *testing.T) {
 func runGitProxy() int {
 	args := os.Args[1:]
 	mode := os.Getenv("SPAS_APP_GIT_PROXY")
+	if (mode == "stall-push" || mode == "auth-fail-push") && containsArgument(args, "push") {
+		if mode == "auth-fail-push" {
+			_, _ = fmt.Fprintln(os.Stderr, "controlled authentication failure: provision unattended credentials")
+			return 128
+		}
+		if err := os.WriteFile(os.Getenv("SPAS_APP_PUSH_READY"), []byte("ready"), 0o600); err != nil {
+			return 1
+		}
+		time.Sleep(time.Minute)
+		return 0
+	}
 	if mode == "remove-before-diff" && containsArgument(args, "diff") && containsArgument(args, "--no-index") {
 		if err := os.Remove(os.Getenv("SPAS_APP_EDIT_PATH")); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)

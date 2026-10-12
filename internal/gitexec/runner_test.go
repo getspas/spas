@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/getspas/spas/internal/limits"
+	"github.com/getspas/spas/internal/lock"
 )
 
 func TestRunCapturesOutput(t *testing.T) {
@@ -313,6 +314,32 @@ func TestGitExecHelperProcess(t *testing.T) {
 		return
 	case "sleep":
 		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	case "locked-descendant-parent":
+		command := exec.Command(os.Args[0], "-test.run=^TestGitExecHelperProcess$")
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "SPAS_GITEXEC_HELPER=") {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(command.Env, "SPAS_GITEXEC_HELPER=locked-descendant")
+		command.Stdout, command.Stderr = os.Stdout, os.Stderr
+		if err := command.Start(); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "locked-descendant":
+		dir := os.Getenv("SPAS_GITEXEC_LOCK_DIR")
+		l, err := lock.Acquire(dir, "descendant")
+		if err != nil {
+			os.Exit(2)
+		}
+		defer l.Release()
+		if err := os.WriteFile(filepath.Join(dir, "ready"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(3)
+		}
+		time.Sleep(time.Minute)
 		os.Exit(0)
 	case "capture-overflow":
 		writeRepeated(os.Stdout, limits.MaxCapturedGitStdoutBytes+1)

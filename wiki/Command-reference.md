@@ -12,7 +12,7 @@ The following flags apply to all SPAS commands:
 | :--- | :--- | :--- |
 | `--repo PATH` | String | Path to the project Git workspace directory (defaults to `.`) |
 | `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
-| `--non-interactive` | Flag | Disable interactive prompts; fails if any required decision flag is missing |
+| `--non-interactive` | Flag | Disable SPAS and supported Git authentication prompts; fail if a required decision is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
@@ -377,7 +377,35 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 | `11` | `unsupported_path` | Path is not a regular file (symlinks, junctions, control characters, or invalid encodings). |
 | `130` | `interrupted` | Execution cancelled by user interrupt (Ctrl+C / SIGINT). |
 
-The intended result for `--timeout` expiry is exit code `1` (`operation_failed`).
-A known limitation remains: deadlines wrapped by remote Git operations can
-currently return exit code `7` (`auth_or_network`). User signals return exit
-code `130` (`interrupted`).
+`--timeout` expiry returns exit code `1` (`operation_failed`), including during
+remote Git operations. User signals return exit code `130` (`interrupted`).
+
+### Unattended authentication
+
+Complete inputs run directly. `--non-interactive`, `--json`, or nonterminal
+input/output prevents SPAS prompts; a missing decision returns exit code 4 and
+names the required option. `--yes` covers recommended setup choices only.
+Credentials must be provisioned before unattended execution.
+
+SPAS disconnects inherited terminal input from unattended streaming Git while
+preserving explicit plumbing input. It disables Git terminal/askpass prompts,
+sets `SSH_ASKPASS_REQUIRE=never` and `GCM_INTERACTIVE=never`, and passes
+`credential.interactive=false` to clone, fetch, push, ls-remote, and credential
+operations. Stored HTTPS credentials remain available to configured helpers.
+
+Without custom SSH selection, SPAS uses OpenSSH with `BatchMode=yes`: keys or
+an agent and verified known-host entries must already work. Custom selection
+through `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_SSH_VARIANT`, `core.sshCommand`, or
+`ssh.variant` is preserved. Configure such commands for unattended use yourself
+(for example, `GIT_SSH_COMMAND='ssh -oBatchMode=yes -i /path/to/key'`). Other
+credential helpers, proxy commands, and custom interfaces must likewise be
+configured to avoid prompts; these controls cannot guarantee that arbitrary
+external programs remain prompt-free. SPAS never rewrites global Git or SSH
+configuration and preserves Git authentication diagnostics (exit code 7).
+
+`--timeout 5m` bounds command execution; there is no default deadline. Timeout
+or cancellation kills the unattended Git process group on macOS/Linux and uses
+the Windows system `taskkill /T /F` to stop the process tree. If Windows tree
+termination is unavailable, direct Git termination still applies. Detached
+helpers and pre-existing services are outside this boundary. Sync releases its
+link lock and retains pending recovery state so a subsequent sync can resume.

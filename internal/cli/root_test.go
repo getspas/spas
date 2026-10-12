@@ -580,6 +580,13 @@ func TestTimeoutFlagExpiredDeadlineSurfacesOperationFailed(t *testing.T) {
 	}
 }
 
+func TestRemoteGitDeadlineIsAnOperationFailure(t *testing.T) {
+	err := spaserr.Wrap(spaserr.KindAuthNetwork, fmt.Errorf("fetch linked repository: %w", context.DeadlineExceeded))
+	if exitCode(err) != 1 || errorCode(err) != "operation_failed" {
+		t.Fatalf("deadline classification = %d/%s", exitCode(err), errorCode(err))
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
@@ -590,9 +597,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 func TestDoctorCommandUnlinked(t *testing.T) {
-	t.Parallel()
-
 	dir := t.TempDir()
+	for _, name := range []string{"HOME", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"} {
+		t.Setenv(name, dir)
+	}
 	var output bytes.Buffer
 	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
 	root.SetArgs([]string{"doctor", "--repo", dir})

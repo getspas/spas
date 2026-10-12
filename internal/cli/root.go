@@ -107,7 +107,15 @@ rebuild missing or edited owned rules and warn when they repair unexpected
 changes. Edit outside the exact SPAS BEGIN/END markers; unrecognized marker
 text remains external and can survive unlink. Malformed or duplicate matching
 markers require manual repair: restore exactly one matching pair, or remove
-only the verified owned block and retry. Doctor diagnoses without repairs.`,
+only the verified owned block and retry. Doctor diagnoses without repairs.
+
+Complete inputs run directly. --non-interactive, --json, and nonterminal runs
+disable SPAS prompts and Git terminal/askpass prompts. Provision credentials
+beforehand: default OpenSSH uses BatchMode and Git Credential Manager disables
+interaction. Custom SSH commands and credential helpers must be configured
+for unattended use; SPAS cannot control arbitrary helper interfaces. Use
+--timeout to bound execution; there is no default deadline. SPAS does not
+change global Git or SSH configuration.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Version,
@@ -156,7 +164,7 @@ only the verified owned block and retry. Doctor diagnoses without repairs.`,
 	})
 
 	root.PersistentFlags().StringVar(&options.repo, "repo", "", "project Git workspace to operate on (default: current directory)")
-	root.PersistentFlags().BoolVar(&options.nonInteractive, "non-interactive", false, "never prompt; fail when a required choice is not supplied")
+	root.PersistentFlags().BoolVar(&options.nonInteractive, "non-interactive", false, "disable SPAS and supported Git authentication prompts; fail when a required choice is missing")
 	root.PersistentFlags().BoolVarP(&options.yes, "yes", "y", false, "accept recommended non-destructive setup confirmations")
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
@@ -693,8 +701,8 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	git := gitexec.Runner{
 		Path: gitPath,
 		// Git terminal prompts are disabled whenever SPAS itself cannot
-		// prompt, including non-TTY runs, so authentication fails
-		// deterministically instead of hanging while the link lock is held.
+		// prompt, including non-TTY runs. Custom helpers still need their
+		// own unattended configuration; a timeout bounds command execution.
 		NonInteractive: !prompt.Interactive,
 		Stdin:          command.InOrStdin(),
 	}
@@ -729,6 +737,9 @@ func classifyExecutionError(err error) error {
 }
 
 func errorKind(err error) spaserr.Kind {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return spaserr.KindOperation
+	}
 	if kind, ok := spaserr.KindOf(err); ok {
 		return kind
 	}

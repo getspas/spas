@@ -234,15 +234,30 @@ checkout paths.
 
 ### Non-Interactive & CI Automation
 
-Pass `--json` and explicit policies to run SPAS in automated pipelines without interactive prompts:
+Pass `--json` and explicit policies to run SPAS in automated pipelines without SPAS prompts:
 
 ```bash
 spas sync --json \
+  --timeout 5m \
   --message "Update CI environment assets" \
   --conflict abort \
   --existing-exclude preserve \
   --merge-protection skip
 ```
+
+Provision Git credentials before the run. Unattended execution disables Git
+terminal and askpass prompts, uses batch mode for the default OpenSSH transport,
+and disables Git Credential Manager interaction. SSH requires a verified known
+host and a usable key or agent; HTTPS requires a helper that supplies stored
+credentials without interaction. Custom SSH commands and other credential
+helpers need their own unattended configuration; SPAS cannot control arbitrary
+helper dialogs. These controls also apply to nonterminal runs. SPAS does not
+change global Git or SSH settings.
+
+`--timeout` sets a caller-selected deadline; omitting it leaves no deadline.
+Cancellation and timeout stop unattended Git and its attached SSH/helper
+descendants. Detached helpers or external services remain outside SPAS's
+control. An interrupted push retains recovery state for the next `spas sync`.
 
 For complete details on all flags, exit codes, and policies, consult the [Command Reference](https://github.com/getspas/spas/wiki/Command-reference).
 

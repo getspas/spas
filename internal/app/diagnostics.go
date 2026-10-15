@@ -123,7 +123,7 @@ func (a App) Diff(ctx context.Context, options DiffOptions) error {
 
 func (a App) diffFiles(ctx context.Context, root, oldFile, newFile string, stat bool) error {
 	a.Presenter.Stop()
-	args := []string{"--no-pager", "diff", "--color=" + a.Presenter.GitColor(), "--no-ext-diff", "--no-textconv", "--no-index"}
+	args := []string{"--no-pager", "-c", "core.autocrlf=false", "diff", "--color=" + a.Presenter.GitColor(), "--no-ext-diff", "--no-textconv", "--no-index"}
 	if stat {
 		args = append(args, "--stat")
 	}

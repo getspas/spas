@@ -29,6 +29,15 @@ func TestRunCapturesOutput(t *testing.T) {
 	}
 }
 
+func TestRunReportsWorkingDirectoryOnStartFailure(t *testing.T) {
+	t.Parallel()
+	directory := filepath.Join(t.TempDir(), "missing")
+	_, err := (Runner{}).Run(t.Context(), directory, "--version")
+	if err == nil || !strings.Contains(err.Error(), strconv.Quote(directory)) || !strings.Contains(err.Error(), "start git") {
+		t.Fatalf("Run() = %v, want failed operation and working directory", err)
+	}
+}
+
 func TestSanitizedEnvironmentRemovesGitRepositoryOverrides(t *testing.T) {
 	t.Parallel()
 

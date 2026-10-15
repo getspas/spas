@@ -1,6 +1,7 @@
 package exclude
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +112,7 @@ func TestApplyRejectsMalformedMarkersIntroducedAfterPlanning(t *testing.T) {
 		t.Fatal(err)
 	}
 	repaired, err := Apply(plan, nil)
-	if err == nil || repaired || !strings.Contains(err.Error(), "manually") || !strings.Contains(err.Error(), path) {
+	if err == nil || repaired || !strings.Contains(err.Error(), "manually") || !strings.Contains(err.Error(), fmt.Sprintf("%q", path)) {
 		t.Fatalf("Apply() = %t, %v", repaired, err)
 	}
 	content, readErr := os.ReadFile(path)

@@ -23,7 +23,7 @@ func TestSchemaDocumentationVersions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(data)
+		return strings.ReplaceAll(string(data), "\r\n", "\n")
 	}
 	overview := read("wiki/Schemas.md")
 	for _, schema := range []struct {

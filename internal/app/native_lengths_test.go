@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/getspas/spas/internal/linkstate"
@@ -29,6 +30,26 @@ func configureNativeLongPaths(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
 }
 
+func requireNativeGitWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(t.Context(), git, "--version")
+	command.Dir = directory
+	if output, err := command.CombinedOutput(); err != nil {
+		// Windows CreateProcess cannot launch with a working directory beyond
+		// MAX_PATH, even when file operations support longer paths. Probe the
+		// native boundary independently of SPAS before requiring this lifecycle.
+		const windowsErrorDirectory = syscall.Errno(267) // Win32 ERROR_DIRECTORY.
+		if runtime.GOOS == "windows" && errors.Is(err, windowsErrorDirectory) {
+			t.Skipf("native Git cannot start in long working directory %q: %v: %s", directory, err, output)
+		}
+		t.Fatalf("native Git working-directory probe: %v: %s", err, output)
+	}
+}
+
 func TestNativeLongPathsLifecycle(t *testing.T) {
 	configureNativeLongPaths(t)
 	for _, location := range []string{"asset", "workspace", "checkout"} {
@@ -40,6 +61,7 @@ func TestNativeLongPathsLifecycle(t *testing.T) {
 				if err := os.MkdirAll(workspaceParent, 0o700); err != nil {
 					t.Skipf("native filesystem cannot create long workspace root: %v", err)
 				}
+				requireNativeGitWorkingDirectory(t, workspaceParent)
 			}
 			workspace := initializePublicRepository(t, workspaceParent)
 			remote := filepath.Join(root, "assets.git")
@@ -51,6 +73,7 @@ func TestNativeLongPathsLifecycle(t *testing.T) {
 				if err := os.MkdirAll(dataDir, 0o700); err != nil {
 					t.Skipf("native filesystem cannot create long checkout storage: %v", err)
 				}
+				requireNativeGitWorkingDirectory(t, dataDir)
 				instance.Store.DataDir = dataDir
 			}
 			if err := instance.Link(t.Context(), LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {

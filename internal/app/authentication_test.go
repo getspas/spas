@@ -41,7 +41,9 @@ func TestSyncInterruptedPushRetainsRecoveryAndReleasesLock(t *testing.T) {
 			}
 			enableGitProxy(t, mode)
 			instance.Git.Path = os.Args[0]
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			// The deadline covers checkout initialization and Git process startup
+			// as well as the stalled push, including slower native Windows runners.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 			defer cancel()
 			done := make(chan error, 1)
 			go func() { done <- instance.Sync(ctx, syncOptions("save personal file")) }()

@@ -83,6 +83,11 @@ func ParseObserved(value string) (Path, error) {
 }
 
 func Resolve(publicRoot, base, value string) (Path, string, error) {
+	// Windows filesystem APIs replace malformed UTF-8 when converting to UTF-16.
+	// Reject it before observing a different path through those APIs.
+	if !utf8.ValidString(value) {
+		return "", "", fmt.Errorf("SPAS state and exclusion rules require valid UTF-8 paths")
+	}
 	publicRoot, err := filepath.Abs(publicRoot)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve public workspace: %w", err)

@@ -12,6 +12,7 @@ import (
 
 func TestDiffColorFollowsDestinationPolicy(t *testing.T) {
 	publicRoot, _, instance := initializedApp(t, t.TempDir())
+	runGit(t, publicRoot, "config", "core.autocrlf", "true")
 	state := loadState(t, instance, publicRoot)
 	for _, root := range []string{publicRoot, state.Private.LocalRepositoryPath} {
 		runGit(t, root, "config", "color.diff", "always")

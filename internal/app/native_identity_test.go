@@ -542,6 +542,7 @@ func TestUnbornMergeRollbackRemovesAdoptedFiles(t *testing.T) {
 	}
 	seed := filepath.Join(root, "seed-late-ownership")
 	runGit(t, root, "clone", "-q", remote, seed)
+	runGit(t, seed, "checkout", "-q", "-b", "main")
 	runGit(t, seed, "config", "user.name", "SPAS Test")
 	runGit(t, seed, "config", "user.email", "spas@example.invalid")
 	if err := os.WriteFile(filepath.Join(seed, "remote.txt"), []byte("remote\n"), 0o600); err != nil {

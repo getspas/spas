@@ -21,12 +21,19 @@ func TestNativeFilenameLifecycle(t *testing.T) {
 	instance, workspace, root, remote := fixture(t)
 	content := []byte{'b', 'i', 'n', 0, 0xff, '\n'}
 	var names []string
-	for _, name := range []string{
-		"notes:2026.md", "CON", "NUL.txt", "COM¹.log", "CONIN$", "CONOUT$",
-		"trailing.", "trailing ", "wild*card.txt", "question?.txt",
-		`angle<>.txt`, `quote".txt`, "pipe|.txt", `literal\backslash.txt`,
-		"[private].txt", "#private.txt", "!private.txt", ":(glob)*",
-	} {
+	candidates := []string{
+		"[private].txt", "#private.txt", "!private.txt",
+	}
+	if runtime.GOOS != "windows" {
+		// Win32 reserves these spellings even where low-level creation or
+		// directory enumeration can expose a literal entry for them.
+		candidates = append(candidates,
+			"notes:2026.md", "CON", "NUL.txt", "COM¹.log", "CONIN$", "CONOUT$",
+			"trailing.", "trailing ", "wild*card.txt", "question?.txt",
+			`angle<>.txt`, `quote".txt`, "pipe|.txt", `literal\backslash.txt`,
+			":(glob)*")
+	}
+	for _, name := range candidates {
 		if supportsLiteralFilename(t, name) {
 			names = append(names, "assets/"+name)
 		}

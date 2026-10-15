@@ -76,7 +76,9 @@ func TestUnattendedDefaultSSHUsesBatchMode(t *testing.T) {
 	for _, name := range []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GCM_INTERACTIVE"} {
 		t.Setenv(name, "force-interaction")
 	}
-	_, err := (Runner{NonInteractive: true, Stdin: strings.NewReader("must not inherit")}).RunStreaming(t.Context(), dir, "ls-remote", "ssh://git@example.invalid/assets")
+	// Git for Windows prepends bundled tools to PATH. Its explicit exec path
+	// places the controlled SSH helper first without selecting a custom transport.
+	_, err := (Runner{NonInteractive: true, Stdin: strings.NewReader("must not inherit")}).RunStreaming(t.Context(), dir, "--exec-path="+dir, "ls-remote", "ssh://git@example.invalid/assets")
 	var exit *ExitError
 	if !errors.As(err, &exit) || !strings.Contains(exit.Stderr, "controlled SSH authentication failure") {
 		t.Fatalf("SSH failure = %v", err)
@@ -111,7 +113,7 @@ func TestCustomSSHSelectionIsPreserved(t *testing.T) {
 			if runtime.GOOS == "windows" {
 				helper += ".exe"
 			}
-			args := []string{"ls-remote", "ssh://git@example.invalid/assets"}
+			args := []string{"--exec-path=" + dir, "ls-remote", "ssh://git@example.invalid/assets"}
 			switch selection {
 			case "GIT_SSH_COMMAND":
 				t.Setenv(selection, "\""+filepath.ToSlash(helper)+"\" -oBatchMode=yes -p 2222")

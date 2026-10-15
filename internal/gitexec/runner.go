@@ -174,7 +174,7 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 		}
 	}
 
-	return result, fmt.Errorf("start git %s: %w", operationName(args), err)
+	return result, fmt.Errorf("start git %s in %q: %w", operationName(args), dir, err)
 }
 
 type outputBuffer interface {

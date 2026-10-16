@@ -163,6 +163,21 @@ func runGitProxy() int {
 		_, _ = fmt.Fprintln(os.Stdout, "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)")
 		return 1
 	}
+	if mode == "advance-before-push" && containsArgument(args, "push") {
+		marker := os.Getenv("SPAS_APP_PUSH_READY")
+		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+			advance := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), "--git-dir="+os.Getenv("SPAS_APP_REMOTE"), "update-ref", "refs/heads/main", os.Getenv("SPAS_APP_REMOTE_HEAD"))
+			if output, err := advance.CombinedOutput(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "%v: %s", err, output)
+				return 1
+			}
+			if err := os.WriteFile(marker, []byte("advanced"), 0o600); err != nil {
+				return 1
+			}
+		} else if err != nil {
+			return 1
+		}
+	}
 	if mode == "fail-before-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
 		_, _ = fmt.Fprintln(os.Stderr, "injected checkout failure for "+os.Getenv("SPAS_APP_EDIT_PATH"))
 		return 1

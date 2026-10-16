@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,10 +23,17 @@ func TestMain(m *testing.M) {
 			input, _ = io.ReadAll(os.Stdin)
 		}
 		record := struct {
-			Args        []string
-			Input       string
-			Environment map[string]string
-		}{os.Args[1:], string(input), map[string]string{}}
+			Args                  []string
+			Input                 string
+			Environment           map[string]string
+			CredentialInteractive string
+		}{Args: os.Args[1:], Input: string(input), Environment: map[string]string{}}
+		if mode == "credential" {
+			value, err := exec.Command("git", "config", "--get", "credential.interactive").Output()
+			if err == nil {
+				record.CredentialInteractive = strings.TrimSpace(string(value))
+			}
+		}
 		for _, name := range []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GCM_INTERACTIVE"} {
 			record.Environment[name] = os.Getenv(name)
 		}
@@ -151,6 +161,90 @@ func TestCustomSSHSelectionIsPreserved(t *testing.T) {
 				t.Fatalf("interactive authentication suppressed: %s", data)
 			}
 		})
+	}
+}
+
+func TestUnattendedDiffControlsPartialCloneAuthentication(t *testing.T) {
+	dir, record := isolatedAuthentication(t, "ssh")
+	git := func(workdir string, args ...string) Result {
+		t.Helper()
+		result, err := (Runner{}).Run(t.Context(), workdir, args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return result
+	}
+	source := filepath.Join(dir, "source")
+	git(dir, "init", source)
+	git(source, "config", "user.name", "SPAS Test")
+	git(source, "config", "user.email", "spas@example.invalid")
+	git(source, "config", "uploadpack.allowFilter", "true")
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("committed contents\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(source, "add", "tracked.txt")
+	git(source, "commit", "-m", "initial")
+	blob := strings.TrimSpace(string(git(source, "rev-parse", "HEAD:tracked.txt").Stdout))
+	partial := filepath.Join(dir, "partial")
+	git(dir, "clone", "--no-local", "--filter=blob:none", "--no-checkout", source, partial)
+	missing := git(partial, "rev-list", "--objects", "--all", "--missing=print")
+	if !strings.Contains(string(missing.Stdout), "?"+blob) {
+		t.Fatalf("partial clone has no missing tracked blob: %s", missing.Stdout)
+	}
+	index, err := os.ReadFile(filepath.Join(source, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partial, ".git", "index"), index, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partial, "tracked.txt"), []byte("local edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(partial, "remote", "set-url", "origin", "ssh://git@example.invalid/assets")
+	// Diff must fetch the missing committed blob. The default SSH executable is
+	// controlled through the same exec-path seam as explicit remote operations.
+	_, err = (Runner{NonInteractive: true}).Run(t.Context(), partial, "--exec-path="+dir, "diff", "HEAD", "--", "tracked.txt")
+	var exit *ExitError
+	if !errors.As(err, &exit) || !strings.Contains(exit.Stderr, "controlled SSH authentication failure") {
+		t.Fatalf("partial-clone diff failure = %v", err)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Args                  []string
+		Input                 string
+		CredentialInteractive string
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(got.Args, " "), "-oBatchMode=yes") {
+		t.Fatalf("implicit-fetch SSH invocation = %s", data)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="SPAS test"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	t.Setenv("SPAS_AUTH_HELPER", "credential")
+	git(partial, "remote", "set-url", "origin", server.URL+"/assets")
+	git(partial, "config", "credential.helper", "!\""+filepath.ToSlash(os.Args[0])+"\"")
+	_, err = (Runner{NonInteractive: true}).Run(t.Context(), partial, "diff", "HEAD", "--", "tracked.txt")
+	if !errors.As(err, &exit) {
+		t.Fatalf("partial-clone HTTP authentication failure = %v", err)
+	}
+	data, err = os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.CredentialInteractive != "false" || !strings.Contains(got.Input, "protocol=http\n") {
+		t.Fatalf("implicit-fetch credential-helper invocation = %s", data)
 	}
 }
 

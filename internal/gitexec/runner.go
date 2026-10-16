@@ -328,17 +328,18 @@ func (r Runner) commandEnvironment(environment []string) []string {
 	return result
 }
 
-// unattendedArgs controls Git and the default OpenSSH transport without
-// replacing a user's custom SSH command. Custom transports must be configured
-// for unattended use by their owner.
+// unattendedArgs also covers implicit fetches from partial-clone reads. It
+// preserves custom SSH commands, whose owners must configure unattended use.
 func (r Runner) unattendedArgs(ctx context.Context, dir string, args []string) ([]string, error) {
-	operation := operationName(args)
-	if !remoteOperation(operation) {
+	index := operationIndex(args)
+	if index == len(args) {
 		return args, nil
 	}
+	operation := operationName(args)
 	controls := []string{"-c", "credential.interactive=false"}
-	if operation != "credential" && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" && os.Getenv("GIT_SSH_VARIANT") == "" {
-		prefix := args[:operationIndex(args)]
+	// Config cannot fetch objects; excluding it also terminates our own lookup.
+	if operation != "config" && operation != "credential" && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" && os.Getenv("GIT_SSH_VARIANT") == "" {
+		prefix := args[:index]
 		lookup := append(append([]string{}, prefix...), "config", "--get-regexp", `^(core\.sshcommand|ssh\.variant)$`)
 		_, err := r.Run(ctx, dir, lookup...)
 		if code, ok := ExitCode(err); ok && code == 1 {
@@ -347,7 +348,6 @@ func (r Runner) unattendedArgs(ctx context.Context, dir string, args []string) (
 			return nil, fmt.Errorf("inspect SSH configuration: %w", err)
 		}
 	}
-	index := operationIndex(args)
 	result := append([]string{}, args[:index]...)
 	result = append(result, controls...)
 	return append(result, args[index:]...), nil

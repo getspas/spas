@@ -426,8 +426,9 @@ Credentials must be provisioned before unattended execution.
 SPAS disconnects inherited terminal input from unattended streaming Git while
 preserving explicit plumbing input. It disables Git terminal/askpass prompts,
 sets `SSH_ASKPASS_REQUIRE=never` and `GCM_INTERACTIVE=never`, and passes
-`credential.interactive=false` to clone, fetch, push, ls-remote, and credential
-operations. Stored HTTPS credentials remain available to configured helpers.
+`credential.interactive=false` to Git commands. These controls also cover
+implicit fetches when reading a partial project clone. Stored HTTPS credentials
+remain available to configured helpers.
 
 Without custom SSH selection, SPAS uses OpenSSH with `BatchMode=yes`: keys or
 an agent and verified known-host entries must already work. Custom selection

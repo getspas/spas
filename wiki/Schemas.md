@@ -26,9 +26,8 @@ CLI consumers, and an output change need not invalidate local state.
   stream behavior. Internal restructuring that preserves the output contract
   does not require a bump. Consumers should check `schemaVersion` before using
   a payload.
-- Update this overview, the affected reference, examples, and contract tests
-  with a version change. The normal Go test suite compares this table with both
-  code constants and validates the documented CLI JSON examples and versions.
+- Update this overview, the affected reference, examples, and runtime contract
+  tests with a version change.
 
 Recent changes:
 

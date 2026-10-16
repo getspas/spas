@@ -16,6 +16,50 @@ import (
 	"github.com/getspas/spas/internal/spaserr"
 )
 
+func TestFailedUnlinkPreservesExclusionsAndLink(t *testing.T) {
+	t.Parallel()
+	instance, workspace, _, _ := fixture(t)
+	enroll(t, instance, workspace, map[string]string{"personal/a.txt": "a\n", "personal/b.txt": "b\n"})
+	directory := filepath.Join(workspace, "personal")
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
+	if probe, err := os.MkdirTemp(directory, "permission-probe-"); err == nil {
+		_ = os.Remove(probe)
+		t.Skip("native filesystem permits writes to the read-only directory")
+	} else if !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+	excludePath := filepath.Join(workspace, ".git", "info", "exclude")
+	before, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = instance.Unlink(t.Context(), UnlinkOptions{})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("Unlink = %v, want native permission failure", err)
+	}
+	after, err := os.ReadFile(excludePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("failed unlink changed exclusions: %q, %v", after, err)
+	}
+	if _, _, err := instance.linked(t.Context()); err != nil {
+		t.Fatalf("failed unlink lost link: %v", err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Unlink(t.Context(), UnlinkOptions{}); err != nil {
+		t.Fatalf("retry unlink: %v", err)
+	}
+	for name, want := range map[string]string{"a.txt": "a\n", "b.txt": "b\n"} {
+		if got, err := os.ReadFile(filepath.Join(directory, name)); err != nil || string(got) != want {
+			t.Fatalf("retained asset %s = %q, %v", name, got, err)
+		}
+	}
+}
+
 func TestUnlinkRequiresSeparateUnsynchronizedDiscardApproval(t *testing.T) {
 	t.Parallel()
 	for _, force := range []bool{false, true} {

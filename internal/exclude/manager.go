@@ -123,11 +123,8 @@ func Apply(plan Plan, expected ...[]pathmodel.Path) (repaired bool, err error) {
 		if err != nil {
 			return err
 		}
-		if err := replaceDocument(plan.Path, currentExists, currentMode, latest.After, latest.AfterExists); err != nil {
-			return err
-		}
 		observedBlock := bytes.ReplaceAll(latest.originalBlock, []byte("\r\n"), []byte("\n"))
-		repaired = latest.Changed
+		unexpectedDrift := latest.Changed
 		for _, paths := range expected {
 			if plan.workspaceRoot != "" {
 				paths, err = pathmodel.ExclusionPaths(plan.workspaceRoot, paths)
@@ -140,10 +137,14 @@ func Apply(plan Plan, expected ...[]pathmodel.Path) (repaired bool, err error) {
 				expectedBlock = buildBlock([]byte("# BEGIN SPAS link="+plan.linkID), []byte("# END SPAS link="+plan.linkID), []byte("\n"), paths)
 			}
 			if bytes.Equal(observedBlock, expectedBlock) {
-				repaired = false
+				unexpectedDrift = false
 				break
 			}
 		}
+		if err := replaceDocument(plan.Path, currentExists, currentMode, latest.After, latest.AfterExists); err != nil {
+			return err
+		}
+		repaired = unexpectedDrift
 		return nil
 	}))
 	return repaired, err

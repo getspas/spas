@@ -671,6 +671,9 @@ func (a App) Sync(ctx context.Context, options SyncOptions) (returnErr error) {
 					return errors.Join(err, spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("Git stopped a private merge without unresolved paths; no SPAS merge binding was persisted—run spas sync --abort")))
 				}
 				state.ActiveMerge = &linkstate.ActiveMerge{PreMergeHead: livePreMergeHead, MergeHead: liveMergeHead}
+				// The live merge binding now owns recovery of the unpublished
+				// result, including conflicts reached after a rejected push.
+				state.Materializing = nil
 				state.Private.ExpectedHead = livePreMergeHead
 				if saveErr := a.Store.Save(state); saveErr != nil {
 					return errors.Join(err, spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("persist live private merge binding; automatic abort was not attempted—run spas sync --abort: %w", saveErr)))

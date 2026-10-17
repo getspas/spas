@@ -82,36 +82,75 @@ func isolatedAuthentication(t *testing.T, mode string) (string, string) {
 }
 
 func TestUnattendedDefaultSSHUsesBatchMode(t *testing.T) {
-	dir, record := isolatedAuthentication(t, "ssh")
-	for _, name := range []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GCM_INTERACTIVE"} {
-		t.Setenv(name, "force-interaction")
+	for _, repository := range []string{"project", "managed"} {
+		t.Run(repository, func(t *testing.T) {
+			dir, record := isolatedAuthentication(t, "ssh")
+			for _, name := range []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GCM_INTERACTIVE"} {
+				t.Setenv(name, "force-interaction")
+			}
+			// Git for Windows prepends bundled tools to PATH. Its explicit exec path
+			// places the controlled SSH helper first without selecting a custom transport.
+			_, err := (Runner{NonInteractive: true, NoLazyFetch: repository == "managed", Stdin: strings.NewReader("must not inherit")}).RunStreaming(t.Context(), dir, "--exec-path="+dir, "ls-remote", "ssh://git@example.invalid/assets")
+			var exit *ExitError
+			if !errors.As(err, &exit) || !strings.Contains(exit.Stderr, "controlled SSH authentication failure") {
+				t.Fatalf("SSH failure = %v", err)
+			}
+			data, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Args        []string
+				Input       string
+				Environment map[string]string
+			}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(got.Args, " "), "-oBatchMode=yes") || got.Input != "" {
+				t.Fatalf("SSH invocation = %s", data)
+			}
+			for name, want := range map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never", "GCM_INTERACTIVE": "never"} {
+				if got.Environment[name] != want {
+					t.Errorf("%s = %q, want %q", name, got.Environment[name], want)
+				}
+			}
+		})
 	}
-	// Git for Windows prepends bundled tools to PATH. Its explicit exec path
-	// places the controlled SSH helper first without selecting a custom transport.
-	_, err := (Runner{NonInteractive: true, Stdin: strings.NewReader("must not inherit")}).RunStreaming(t.Context(), dir, "--exec-path="+dir, "ls-remote", "ssh://git@example.invalid/assets")
-	var exit *ExitError
-	if !errors.As(err, &exit) || !strings.Contains(exit.Stderr, "controlled SSH authentication failure") {
-		t.Fatalf("SSH failure = %v", err)
+}
+
+func TestManagedLocalReadStartsOneGitProcess(t *testing.T) {
+	dir, _ := isolatedAuthentication(t, "ssh")
+	if _, err := (Runner{}).Run(t.Context(), dir, "init", "-q"); err != nil {
+		t.Fatal(err)
 	}
-	data, err := os.ReadFile(record)
+	trace := filepath.Join(dir, "trace.jsonl")
+	t.Setenv("GIT_TRACE2_EVENT", trace)
+	if _, err := (Runner{NonInteractive: true, NoLazyFetch: true}).Run(t.Context(), dir, "rev-parse", "--show-toplevel"); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(trace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got struct {
-		Args        []string
-		Input       string
-		Environment map[string]string
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(got.Args, " "), "-oBatchMode=yes") || got.Input != "" {
-		t.Fatalf("SSH invocation = %s", data)
-	}
-	for name, want := range map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never", "GCM_INTERACTIVE": "never"} {
-		if got.Environment[name] != want {
-			t.Errorf("%s = %q, want %q", name, got.Environment[name], want)
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	starts := 0
+	for {
+		var event struct {
+			Event string `json:"event"`
 		}
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if event.Event == "start" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("managed local read started %d Git processes, want 1", starts)
 	}
 }
 

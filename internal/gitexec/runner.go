@@ -337,8 +337,11 @@ func (r Runner) unattendedArgs(ctx context.Context, dir string, args []string) (
 	}
 	operation := operationName(args)
 	controls := []string{"-c", "credential.interactive=false"}
+	// Managed local reads prohibit lazy fetching; their explicit remote
+	// operations still need the current SSH transport policy.
+	canFetch := !r.NoLazyFetch || remoteOperation(operation)
 	// Config cannot fetch objects; excluding it also terminates our own lookup.
-	if operation != "config" && operation != "credential" && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" && os.Getenv("GIT_SSH_VARIANT") == "" {
+	if canFetch && operation != "config" && operation != "credential" && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" && os.Getenv("GIT_SSH_VARIANT") == "" {
 		prefix := args[:index]
 		lookup := append(append([]string{}, prefix...), "config", "--get-regexp", `^(core\.sshcommand|ssh\.variant)$`)
 		_, err := r.Run(ctx, dir, lookup...)

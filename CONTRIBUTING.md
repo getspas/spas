@@ -35,7 +35,7 @@ SPAS is a command-line tool written in Go that enables developers to manage envi
 ```
 
 1. **Local Exclusion Layer:** SPAS manages an isolated `# BEGIN SPAS` / `# END SPAS` block in `.git/info/exclude` to keep assets untracked in the main repo without editing `.gitignore`.
-2. **Deterministic State Store (Schema 2):** Authoritative state binds the project workspace to a single linked GitHub repository and branch, enforcing strict head tracking (`Private.ExpectedHead`).
+2. **Deterministic State Store:** Authoritative state binds the project workspace to a single linked GitHub repository and branch, enforcing strict head tracking (`Private.ExpectedHead`). See [schema contracts](wiki/Schemas.md) for persisted-state and CLI JSON versions, compatibility, and bump rules.
 3. **9-Phase Synchronization Pipeline:** Acquires an advisory link lock, stages workspace snapshots, performs Git-native merge operations, pushes to GitHub, and materializes files via atomic renames (`/.spas-tmp/`).
 4. **Fail-Safe Recovery:** Journaled checkouts and live merge tracking (`ActiveMerge`) ensure no state is guessed or corrupted during unexpected process interruptions.
 
@@ -113,6 +113,14 @@ npx -y markdownlint-cli2 "**/*.md"
 ```
 
 CI runs full test suites natively across Linux, macOS, and Windows (`amd64` and `arm64`), followed by cross-compilation builds for all release targets with `CGO_ENABLED=0`.
+
+For native terminal checks on macOS and Linux, run
+`python3 scripts/ci/test-terminal.py` with Python 3.9 or newer. The harness builds
+local test binaries and verifies phases, counts, narrow terminals, stream
+redirection, prompt/Git ordering, timeout, and interruption using isolated
+repositories. It prints the temporary directory containing transcripts.
+Native Windows console checks require running the compiled terminal tests
+from a supported Windows terminal; skipped tests do not establish capability.
 
 ---
 

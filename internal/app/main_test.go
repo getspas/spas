@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -59,6 +61,20 @@ func TestGitProxyPreservesOptionsAndExitStatus(t *testing.T) {
 func runGitProxy() int {
 	args := os.Args[1:]
 	mode := os.Getenv("SPAS_APP_GIT_PROXY")
+	if mode == "slow-inspection" && containsArgument(args, "ls-files") {
+		time.Sleep(350 * time.Millisecond)
+	}
+	if (mode == "stall-push" || mode == "auth-fail-push") && containsArgument(args, "push") {
+		if mode == "auth-fail-push" {
+			_, _ = fmt.Fprintln(os.Stderr, "controlled authentication failure: provision unattended credentials")
+			return 128
+		}
+		if err := os.WriteFile(os.Getenv("SPAS_APP_PUSH_READY"), []byte("ready"), 0o600); err != nil {
+			return 1
+		}
+		time.Sleep(time.Minute)
+		return 0
+	}
 	if mode == "remove-before-diff" && containsArgument(args, "diff") && containsArgument(args, "--no-index") {
 		if err := os.Remove(os.Getenv("SPAS_APP_EDIT_PATH")); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
@@ -147,6 +163,25 @@ func runGitProxy() int {
 		_, _ = fmt.Fprintln(os.Stdout, "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)")
 		return 1
 	}
+	if mode == "advance-before-push" && containsArgument(args, "push") {
+		marker := os.Getenv("SPAS_APP_PUSH_READY")
+		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+			advance := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), "--git-dir="+os.Getenv("SPAS_APP_REMOTE"), "update-ref", "refs/heads/main", os.Getenv("SPAS_APP_REMOTE_HEAD"))
+			if output, err := advance.CombinedOutput(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "%v: %s", err, output)
+				return 1
+			}
+			if err := os.WriteFile(marker, []byte("advanced"), 0o600); err != nil {
+				return 1
+			}
+		} else if err != nil {
+			return 1
+		}
+	}
+	if mode == "fail-before-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
+		_, _ = fmt.Fprintln(os.Stderr, "injected checkout failure for "+os.Getenv("SPAS_APP_EDIT_PATH"))
+		return 1
+	}
 	command := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), args...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
@@ -157,6 +192,24 @@ func runGitProxy() int {
 			return exitErr.ExitCode()
 		}
 		return 127
+	}
+	if mode == "obstruct-staging-after-push" && containsArgument(args, "push") {
+		if err := os.WriteFile(os.Getenv("SPAS_APP_EDIT_PATH"), []byte("occupied\n"), 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	if mode == "track-public-after-merge" && containsArgument(args, "merge") && !containsArgument(args, "--abort") {
+		path := os.Getenv("SPAS_APP_EDIT_PATH")
+		if err := os.WriteFile(path, []byte("project\n"), 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		track := exec.Command(os.Getenv("SPAS_APP_REAL_GIT"), "-C", os.Getenv("SPAS_APP_WORKSPACE"), "add", "-f", "--", filepath.Base(path))
+		if output, err := track.CombinedOutput(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%v: %s", err, output)
+			return 1
+		}
 	}
 	if (mode == "fail-write-tree-and-recreate-marker" || mode == "recreate-marker-after-abort") &&
 		containsArgument(args, "merge") &&

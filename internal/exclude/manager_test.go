@@ -163,7 +163,7 @@ func TestRestoreRemovesExcludeFileCreatedByApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(plan); err != nil {
+	if _, err := Apply(plan, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -191,7 +191,7 @@ func TestApplyAndRestorePreserveConcurrentOutsideContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte("user/\nnew-rule/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(plan); err != nil {
+	if _, err := Apply(plan, nil); err != nil {
 		t.Fatal(err)
 	}
 	afterApply, err := os.ReadFile(path)
@@ -206,7 +206,7 @@ func TestApplyAndRestorePreserveConcurrentOutsideContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(plan); err != nil {
+	if _, err := Apply(plan, nil); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -249,7 +249,7 @@ func TestApplyFailsFastWhenAdjacentLockExistsAndDoesNotStealIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer holder.Release()
-	if err := Apply(plan); err == nil {
+	if _, err := Apply(plan, nil); err == nil {
 		t.Fatal("Apply() error = nil, want lock contention")
 	} else {
 		kind, ok := spaserr.KindOf(err)
@@ -277,7 +277,7 @@ func TestApplyAllowsPreexistingUnlockedLockFile(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte("previous metadata"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(plan); err != nil {
+	if _, err := Apply(plan, nil); err != nil {
 		t.Fatalf("Apply() error = %v, want unlocked persistent lock file to be reusable", err)
 	}
 	if _, err := os.Stat(lockPath); err != nil {
@@ -296,7 +296,7 @@ func TestApplyRetainsPersistentLockAfterHandledFailure(t *testing.T) {
 	if err := os.WriteFile(path, []byte("# BEGIN SPAS link=lnk_test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(plan); err == nil || !strings.Contains(err.Error(), "unterminated") {
+	if _, err := Apply(plan, nil); err == nil || !strings.Contains(err.Error(), "unterminated") {
 		t.Fatalf("Apply() error = %v, want malformed-block failure", err)
 	}
 	if _, err := os.Stat(path + ".spas.lock"); err != nil {
@@ -319,10 +319,10 @@ func TestCooperatingLinkPlansSerializeWithoutLosingEitherBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(first); err != nil {
+	if _, err := Apply(first, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(second); err != nil {
+	if _, err := Apply(second, nil); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(path)

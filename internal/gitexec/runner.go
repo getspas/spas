@@ -20,6 +20,8 @@ type Runner struct {
 	Stdin          io.Reader
 	Stdout         io.Writer
 	Stderr         io.Writer
+	// BeforeTerminal suspends presentation through child exit and stream draining.
+	BeforeTerminal func() func()
 	// NoLazyFetch is enabled only for the SPAS-managed full private clone.
 	// Public repositories may be partial clones whose ordinary reads need to
 	// retrieve missing promisor objects.
@@ -86,6 +88,18 @@ func (r Runner) run(ctx context.Context, dir string, stream bool, args ...string
 }
 
 func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input io.Reader, args ...string) (Result, error) {
+	operation := operationName(args)
+	remote := remoteOperation(operation)
+	if r.BeforeTerminal != nil && (stream || remote) {
+		defer r.BeforeTerminal()()
+	}
+	if r.NonInteractive {
+		var err error
+		args, err = r.unattendedArgs(ctx, dir, args)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	path := r.Path
 	if path == "" {
 		path = "git"
@@ -94,14 +108,10 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 	commandCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, path, args...)
+	configureCancellation(cmd, r.NonInteractive)
 	cmd.Dir = dir
 	cmd.Env = r.commandEnvironment(os.Environ())
 	cmd.WaitDelay = limits.GitCommandWaitDelay
-	if r.NonInteractive {
-		// Disable Git credential prompts and askpass helpers for unattended
-		// commands. Streaming commands also leave inherited stdin disconnected.
-		cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
-	}
 
 	var stdout outputBuffer
 	var stderr outputBuffer
@@ -164,7 +174,7 @@ func (r Runner) runWithInput(ctx context.Context, dir string, stream bool, input
 		}
 	}
 
-	return result, fmt.Errorf("start git %s: %w", operationName(args), err)
+	return result, fmt.Errorf("start git %s in %q: %w", operationName(args), dir, err)
 }
 
 type outputBuffer interface {
@@ -285,6 +295,18 @@ func outputLimitError(buffers ...outputBuffer) *OutputLimitError {
 }
 
 func (r Runner) commandEnvironment(environment []string) []string {
+	if r.NonInteractive {
+		filtered := make([]string, 0, len(environment))
+		for _, entry := range environment {
+			key, _, _ := strings.Cut(entry, "=")
+			switch strings.ToUpper(key) {
+			case "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GCM_INTERACTIVE":
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		environment = append(filtered, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=never", "GCM_INTERACTIVE=never")
+	}
 	result := append(
 		sanitizedEnvironment(environment),
 		"LC_ALL=C",
@@ -304,6 +326,34 @@ func (r Runner) commandEnvironment(environment []string) []string {
 		result = append(result, "GIT_OPTIONAL_LOCKS=0")
 	}
 	return result
+}
+
+// unattendedArgs also covers implicit fetches from partial-clone reads. It
+// preserves custom SSH commands, whose owners must configure unattended use.
+func (r Runner) unattendedArgs(ctx context.Context, dir string, args []string) ([]string, error) {
+	index := operationIndex(args)
+	if index == len(args) {
+		return args, nil
+	}
+	operation := operationName(args)
+	controls := []string{"-c", "credential.interactive=false"}
+	// Managed local reads prohibit lazy fetching; their explicit remote
+	// operations still need the current SSH transport policy.
+	canFetch := !r.NoLazyFetch || remoteOperation(operation)
+	// Config cannot fetch objects; excluding it also terminates our own lookup.
+	if canFetch && operation != "config" && operation != "credential" && os.Getenv("GIT_SSH_COMMAND") == "" && os.Getenv("GIT_SSH") == "" && os.Getenv("GIT_SSH_VARIANT") == "" {
+		prefix := args[:index]
+		lookup := append(append([]string{}, prefix...), "config", "--get-regexp", `^(core\.sshcommand|ssh\.variant)$`)
+		_, err := r.Run(ctx, dir, lookup...)
+		if code, ok := ExitCode(err); ok && code == 1 {
+			controls = append(controls, "-c", "core.sshCommand=ssh -oBatchMode=yes", "-c", "ssh.variant=ssh")
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect SSH configuration: %w", err)
+		}
+	}
+	result := append([]string{}, args[:index]...)
+	result = append(result, controls...)
+	return append(result, args[index:]...), nil
 }
 
 func sanitizedEnvironment(environment []string) []string {
@@ -351,8 +401,15 @@ func writerOr(value, fallback io.Writer) io.Writer {
 }
 
 func operationName(args []string) string {
+	if index := operationIndex(args); index < len(args) {
+		return args[index]
+	}
+	return "command"
+}
+
+func operationIndex(args []string) int {
 	skipNext := false
-	for _, arg := range args {
+	for index, arg := range args {
 		if skipNext {
 			skipNext = false
 			continue
@@ -366,10 +423,10 @@ func operationName(args []string) string {
 			continue
 		}
 		if len(arg) > 0 && arg[0] != '-' {
-			return arg
+			return index
 		}
 	}
-	return "command"
+	return len(args)
 }
 
 func ExitCode(err error) (int, bool) {
@@ -378,4 +435,13 @@ func ExitCode(err error) (int, bool) {
 		return 0, false
 	}
 	return exitErr.ExitCode, true
+}
+
+func remoteOperation(operation string) bool {
+	switch operation {
+	case "clone", "fetch", "push", "ls-remote", "credential":
+		return true
+	default:
+		return false
+	}
 }

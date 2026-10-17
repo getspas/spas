@@ -1,7 +1,9 @@
 package collision
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -11,10 +13,9 @@ import (
 type Kind string
 
 const (
-	TrackedPath     Kind = "tracked_path"
-	FileDirectory   Kind = "file_directory"
-	CaseInsensitive Kind = "case_insensitive_filesystem"
-	PortablePath    Kind = "cross_platform_filesystem"
+	TrackedPath   Kind = "tracked_path"
+	FileDirectory Kind = "file_directory"
+	NativeAlias   Kind = "native_filesystem_alias"
 )
 
 type Collision struct {
@@ -29,16 +30,45 @@ func (c Collision) Error() string {
 		return fmt.Sprintf("tracked-path conflict: public and private repositories both track %q", c.Public)
 	case FileDirectory:
 		return fmt.Sprintf("file/directory conflict: public %q conflicts with private %q", c.Public, c.Private)
-	case CaseInsensitive:
-		return fmt.Sprintf("case-insensitive filesystem conflict: public %q conflicts with private %q", c.Public, c.Private)
-	case PortablePath:
-		return fmt.Sprintf("cross-platform filesystem conflict: public %q conflicts with private %q", c.Public, c.Private)
+	case NativeAlias:
+		return fmt.Sprintf("native filesystem alias conflict: public %q conflicts with private %q", c.Public, c.Private)
 	default:
 		return fmt.Sprintf("path conflict: public %q conflicts with private %q", c.Public, c.Private)
 	}
 }
 
-func Detect(public, private []pathmodel.Path, ignoreCase bool) []Collision {
+func DetectNative(root string, public, private []pathmodel.Path) ([]Collision, error) {
+	keys, err := pathmodel.ComparisonKeys(root, private, public)
+	if err != nil {
+		return nil, err
+	}
+	return detect(public, private, func(path pathmodel.Path) string { return keys[path] }), nil
+}
+
+// DetectObserved checks existing native aliases without writing a probe, for
+// read-only diagnostics. Missing entries retain their exact Git spelling.
+func DetectObserved(root string, public, private []pathmodel.Path) ([]Collision, error) {
+	keys := make(map[pathmodel.Path]string)
+	observer := pathmodel.NewObserver(root)
+	for _, path := range append(append([]pathmodel.Path{}, public...), private...) {
+		if _, parseErr := pathmodel.Parse(path.String()); parseErr != nil {
+			keys[path] = path.String()
+			continue
+		}
+		observed, err := observer.Destination(path)
+		if errors.Is(err, os.ErrNotExist) {
+			keys[path] = path.String()
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		keys[path] = observed.String()
+	}
+	return detect(public, private, func(path pathmodel.Path) string { return keys[path] }), nil
+}
+
+func detect(public, private []pathmodel.Path, key func(pathmodel.Path) string) []Collision {
 	type entry struct {
 		path      pathmodel.Path
 		canonical string
@@ -46,7 +76,7 @@ func Detect(public, private []pathmodel.Path, ignoreCase bool) []Collision {
 	publicEntries := make([]entry, 0, len(public))
 	publicExact := make(map[string][]pathmodel.Path, len(public))
 	for _, path := range public {
-		canonical := pathmodel.Canonical(path, ignoreCase)
+		canonical := key(path)
 		publicEntries = append(publicEntries, entry{path: path, canonical: canonical})
 		publicExact[canonical] = append(publicExact[canonical], path)
 	}
@@ -59,15 +89,13 @@ func Detect(public, private []pathmodel.Path, ignoreCase bool) []Collision {
 
 	result := []Collision{}
 	for _, privatePath := range private {
-		privateCanonical := pathmodel.Canonical(privatePath, ignoreCase)
+		privateCanonical := key(privatePath)
 		for _, publicPath := range publicExact[privateCanonical] {
 			switch {
 			case publicPath == privatePath:
 				result = append(result, Collision{Kind: TrackedPath, Public: publicPath, Private: privatePath})
-			case ignoreCase:
-				result = append(result, Collision{Kind: CaseInsensitive, Public: publicPath, Private: privatePath})
 			default:
-				result = append(result, Collision{Kind: PortablePath, Public: publicPath, Private: privatePath})
+				result = append(result, Collision{Kind: NativeAlias, Public: publicPath, Private: privatePath})
 			}
 		}
 		for separator := strings.IndexByte(privateCanonical, '/'); separator >= 0; {
@@ -101,38 +129,6 @@ func Detect(public, private []pathmodel.Path, ignoreCase bool) []Collision {
 	return result
 }
 
-// PrivateRevisionCompatibility validates two individually portable private
-// trees as successive revisions. Case-only file renames are valid: Git may
-// replace "Foo" with "foo" between revisions even though their canonical
-// spellings are equal. A file/directory transition is deliberately rejected
-// by the current implementation because materializing it safely requires ordered removal of the
-// old hierarchy and more extensive crash-recovery state.
-func PrivateRevisionCompatibility(current, incoming []pathmodel.Path, ignoreCase bool) error {
-	if err := PrivatePortabilityConflicts(current, ignoreCase); err != nil {
-		return err
-	}
-	if err := PrivatePortabilityConflicts(incoming, ignoreCase); err != nil {
-		return err
-	}
-
-	currentByCanonical := make(map[string]pathmodel.Path, len(current))
-	incomingByCanonical := make(map[string]pathmodel.Path, len(incoming))
-	for _, path := range current {
-		currentByCanonical[pathmodel.Canonical(path, ignoreCase)] = path
-	}
-	for _, path := range incoming {
-		incomingByCanonical[pathmodel.Canonical(path, ignoreCase)] = path
-	}
-
-	if ancestor, descendant, found := crossRevisionFileDirectoryConflict(currentByCanonical, incomingByCanonical); found {
-		return fmt.Errorf("private repository changes a path between a file and a directory across revisions: %q conflicts with %q", ancestor, descendant)
-	}
-	if ancestor, descendant, found := crossRevisionFileDirectoryConflict(incomingByCanonical, currentByCanonical); found {
-		return fmt.Errorf("private repository changes a path between a file and a directory across revisions: %q conflicts with %q", ancestor, descendant)
-	}
-	return nil
-}
-
 func crossRevisionFileDirectoryConflict(files, descendants map[string]pathmodel.Path) (pathmodel.Path, pathmodel.Path, bool) {
 	canonicalPaths := make([]string, 0, len(descendants))
 	for canonical := range descendants {
@@ -155,38 +151,43 @@ func crossRevisionFileDirectoryConflict(files, descendants map[string]pathmodel.
 	return "", "", false
 }
 
-func PrivatePortabilityConflicts(paths []pathmodel.Path, ignoreCase bool) error {
-	// Git trees contain files, not standalone directories. A private tree is
-	// portable only when no two file paths collapse to the same canonical
-	// spelling and no canonical file path is an ancestor of another file. The
-	// latter catches trees such as `Foo` and `foo/child`, which are legal on a
-	// case-sensitive filesystem but cannot be checked out on a case-insensitive
-	// one because `Foo` would need to be both a file and a directory.
-	seen := make(map[string]pathmodel.Path, len(paths))
-	for _, path := range paths {
-		canonical := pathmodel.Canonical(path, ignoreCase)
-		if previous, found := seen[canonical]; found && previous != path {
-			return fmt.Errorf("private repository contains a non-portable case or Unicode path conflict: %q and %q", previous, path)
-		}
-		seen[canonical] = path
+// ValidateDestination checks each simultaneous tree separately, then checks
+// cross-revision file/directory transitions without rejecting native aliases
+// used only as a rename between revisions.
+func ValidateDestination(root string, current, incoming []pathmodel.Path) error {
+	keys, err := pathmodel.DestinationKeys(root, append(append([]pathmodel.Path{}, current...), incoming...))
+	if err != nil {
+		return err
 	}
-	canonicalPaths := make([]string, 0, len(seen))
-	for canonical := range seen {
-		canonicalPaths = append(canonicalPaths, canonical)
-	}
-	sort.Strings(canonicalPaths)
-	for _, canonical := range canonicalPaths {
-		path := seen[canonical]
-		for separator := strings.IndexByte(canonical, '/'); separator >= 0; {
-			if ancestor, found := seen[canonical[:separator]]; found {
-				return fmt.Errorf("private repository contains a non-portable case-folded file/directory conflict: %q and %q", ancestor, path)
+	keyed := func(paths []pathmodel.Path) (map[string]pathmodel.Path, error) {
+		original := make(map[string]pathmodel.Path, len(paths))
+		for _, path := range paths {
+			key := keys[path]
+			if prior, exists := original[key]; exists && prior != path {
+				return nil, fmt.Errorf("destination %q aliases paths %q and %q", root, prior, path)
 			}
-			next := strings.IndexByte(canonical[separator+1:], '/')
-			if next < 0 {
-				break
-			}
-			separator += next + 1
+			original[key] = path
 		}
+		return original, nil
+	}
+	firstNames, err := keyed(current)
+	if err != nil {
+		return err
+	}
+	secondNames, err := keyed(incoming)
+	if err != nil {
+		return err
+	}
+	for _, names := range []map[string]pathmodel.Path{firstNames, secondNames} {
+		if a, b, found := crossRevisionFileDirectoryConflict(names, names); found {
+			return fmt.Errorf("destination %q has a file/directory conflict: %q and %q", root, a, b)
+		}
+	}
+	if a, b, found := crossRevisionFileDirectoryConflict(firstNames, secondNames); found {
+		return fmt.Errorf("destination %q changes between a file and directory: %q and %q", root, a, b)
+	}
+	if a, b, found := crossRevisionFileDirectoryConflict(secondNames, firstNames); found {
+		return fmt.Errorf("destination %q changes between a file and directory: %q and %q", root, a, b)
 	}
 	return nil
 }

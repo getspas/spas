@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,10 +17,12 @@ import (
 	"github.com/getspas/spas/internal/filesync"
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/lock"
 	"github.com/getspas/spas/internal/mergeprotect"
 	"github.com/getspas/spas/internal/pathmodel"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/privategit"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/publicgit"
@@ -30,18 +31,17 @@ import (
 
 var removePrivateClone = os.RemoveAll
 
-const JSONSchemaVersion = 1
-
 type App struct {
-	Git      gitexec.Runner
-	Store    linkstate.Store
-	Prompt   interaction.Prompter
-	Out      io.Writer
-	Err      io.Writer
-	RepoHint string
-	PathBase string
-	JSON     bool
-	Provider provider.RepositoryProvider
+	Presenter presentation.Presenter
+	Git       gitexec.Runner
+	Store     linkstate.Store
+	Prompt    interaction.Prompter
+	Out       io.Writer
+	Err       io.Writer
+	RepoHint  string
+	PathBase  string
+	JSON      bool
+	Provider  provider.RepositoryProvider
 }
 
 type ExistingExcludePolicy string
@@ -62,15 +62,16 @@ const (
 )
 
 type LinkOptions struct {
-	Repository  string
-	Transport   provider.Transport
-	Branch      string
-	Replace     bool
-	DryRun      bool
-	AllowPublic bool
+	Repository string
+	Transport  provider.Transport
+	Branch     string
+	Replace    bool
+	DryRun     bool
 }
 
 func (a App) Link(ctx context.Context, options LinkOptions) error {
+	a.Presenter.Phase("Checking project workspace", -1)
+	defer a.Presenter.Stop()
 	repository, err := a.publicRepository(ctx)
 	if err != nil {
 		return err
@@ -96,34 +97,14 @@ func (a App) Link(ctx context.Context, options LinkOptions) error {
 			return err
 		}
 	}
-	publicApproved := false
 	probed := false
-	if !options.AllowPublic && !options.DryRun {
-		isPublic, probeErr := a.Provider.ProbePublic(ctx, a.Git, ref)
-		if probeErr != nil {
-			return probeErr
+	if !options.DryRun {
+		if err := a.warnPublicRepository(ctx, ref); err != nil {
+			return err
 		}
 		probed = true
-		if isPublic {
-			approved, err := a.Prompt.Confirm(
-				ctx,
-				fmt.Sprintf("Repository %q is publicly readable on GitHub. Managed private assets will be publicly accessible. Continue?", ref.Canonical),
-				false,
-				false,
-			)
-			if err != nil {
-				return err
-			}
-			if !approved {
-				return fmt.Errorf("linking publicly readable repository declined")
-			}
-			publicApproved = true
-		}
-	} else if options.AllowPublic {
-		publicApproved = true
 	}
 	state := linkstate.New(repository.Root, repository.CommonDir, ref, options.Branch, a.Store)
-	state.Private.PublicApproved = publicApproved
 	if !options.DryRun {
 		linkLock, err := lock.Acquire(filepath.Join(a.Store.DataDir, "locks"), state.LinkID)
 		if err != nil {
@@ -193,6 +174,8 @@ type AddOptions struct {
 }
 
 func (a App) Add(ctx context.Context, options AddOptions) error {
+	a.Presenter.Phase("Selecting assets", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -226,11 +209,10 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 			return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("a private merge is in progress; run spas sync --continue or spas sync --abort before adding paths"))
 		}
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
-	files, err := a.expandPaths(repository.Root, state.Private.LocalRepositoryPath, options.Paths)
+	files, err := a.expandPaths(repository.Root, options.Paths)
 	if err != nil {
 		return err
 	}
@@ -238,11 +220,11 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	if err != nil {
 		return err
 	}
-	publicSet := canonicalSet(publicPaths, ignoreCase)
+	publicSet := pathIndex(publicPaths)
 
 	additions := stringsToPaths(state.PendingAdds)
-	addSet := canonicalSet(additions, ignoreCase)
-	managedSet := canonicalSet(stringsToPaths(state.ManagedPaths), ignoreCase)
+	addSet := pathIndex(additions)
+	managedSet := pathIndex(stringsToPaths(state.ManagedPaths))
 	pendingRemoves := append([]linkstate.PendingRemoval{}, state.PendingRemoves...)
 	pendingRemoveSet := make(map[string]pathmodel.Path, len(pendingRemoves))
 	for _, removal := range pendingRemoves {
@@ -250,13 +232,27 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 		if parseErr != nil {
 			return parseErr
 		}
-		pendingRemoveSet[pathmodel.Canonical(path, ignoreCase)] = path
+		pendingRemoveSet[path.String()] = path
+	}
+	for index, file := range files {
+		resolved, err := resolveNativeSelection(repository.Root, file, unionPaths(additions, stringsToPaths(state.ManagedPaths)))
+		if err != nil {
+			return err
+		}
+		files[index] = resolved
+	}
+	trackedCollisions, err := collision.DetectNative(repository.Root, publicPaths, files)
+	if err != nil {
+		return err
+	}
+	for _, conflict := range trackedCollisions {
+		publicSet[conflict.Private.String()] = conflict.Public
 	}
 	var newlyAdded []pathmodel.Path
 	var cancelledRemovals []pathmodel.Path
 	var skipped []pathmodel.Path
 	for _, file := range files {
-		if _, found := publicSet[pathmodel.Canonical(file, ignoreCase)]; found {
+		if _, found := publicSet[file.String()]; found {
 			decision, decisionErr := a.trackedPathDecision(ctx, file, options.SkipTracked)
 			if decisionErr != nil {
 				return decisionErr
@@ -270,7 +266,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 				fmt.Errorf("public Git already tracks %q; remove that path from public tracking before adding it to SPAS", file),
 			)
 		}
-		key := pathmodel.Canonical(file, ignoreCase)
+		key := file.String()
 		if managed, found := managedSet[key]; found {
 			file, err = authoritativeManagedPath(repository.Root, file.OSPath(repository.Root), managed)
 			if err != nil {
@@ -290,7 +286,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 				if parseErr != nil {
 					return parseErr
 				}
-				if pathmodel.Canonical(removalManagedPath, ignoreCase) == key {
+				if removalManagedPath.String() == key {
 					cancelledRemovals = append(cancelledRemovals, removalPath)
 					continue
 				}
@@ -311,15 +307,13 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	sort.Slice(additions, func(i, j int) bool { return additions[i] < additions[j] })
 	sort.Slice(pendingRemoves, func(i, j int) bool { return pendingRemoves[i].Path < pendingRemoves[j].Path })
 	sort.Slice(cancelledRemovals, func(i, j int) bool { return cancelledRemovals[i] < cancelledRemovals[j] })
+	priorExcluded := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
 	state.PendingAdds = pathsToStrings(additions)
 	state.PendingRemoves = pendingRemoves
 	if err := a.Store.Validate(state); err != nil {
 		return err
 	}
-	// A tree SPAS will publish must remain checkable on every supported
-	// platform, so portability is judged case-insensitively here regardless
-	// of the local filesystem.
-	if err := collisionPortability(managedForExclusion(state, additions, nil)); err != nil {
+	if err := validateAssetDestinations(repository.Root, state.Private.LocalRepositoryPath, managedForExclusion(state, additions, nil), nil); err != nil {
 		return err
 	}
 
@@ -328,7 +322,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 	if err != nil {
 		return err
 	}
-	excludePlan, err := exclude.Build(excludePath, state.Exclude.BlockID, managed)
+	excludePlan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, managed)
 	if err != nil {
 		return err
 	}
@@ -352,7 +346,7 @@ func (a App) Add(ctx context.Context, options AddOptions) error {
 		})
 	}
 
-	if err := exclude.Apply(excludePlan); err != nil {
+	if err := a.applyExclusions(excludePlan, priorExcluded); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, managed); err != nil {
@@ -394,6 +388,8 @@ type RemoveOptions struct {
 }
 
 func (a App) Remove(ctx context.Context, options RemoveOptions) error {
+	a.Presenter.Phase("Planning asset removal", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -427,12 +423,11 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 			return spaserr.Wrap(spaserr.KindUnsafeGitState, fmt.Errorf("a private merge is in progress; run spas sync --continue or spas sync --abort before removing paths"))
 		}
 	}
-	ignoreCase, err := a.casePolicy(ctx, repository)
-	if err != nil {
+	if err := a.warnCaseConfig(ctx, repository); err != nil {
 		return err
 	}
-	managedSet := canonicalSet(stringsToPaths(state.ManagedPaths), ignoreCase)
-	pendingAdds := canonicalSet(stringsToPaths(state.PendingAdds), ignoreCase)
+	managedSet := pathIndex(stringsToPaths(state.ManagedPaths))
+	pendingAdds := pathIndex(stringsToPaths(state.PendingAdds))
 	removes := append([]linkstate.PendingRemoval{}, state.PendingRemoves...)
 	removeIndex := make(map[string]int, len(removes))
 	for index, removal := range removes {
@@ -440,7 +435,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 		if parseErr != nil {
 			return parseErr
 		}
-		removeIndex[pathmodel.Canonical(path, ignoreCase)] = index
+		removeIndex[path.String()] = index
 	}
 	unenrolled := []string{}
 	refreshed := []string{}
@@ -449,7 +444,11 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 		if err != nil {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("resolve managed path %q: %w", value, err))
 		}
-		canonical := pathmodel.Canonical(requested, ignoreCase)
+		requested, err = resolveNativeSelection(repository.Root, requested, unionPaths(stringsToPaths(state.ManagedPaths), stringsToPaths(state.PendingAdds)))
+		if err != nil {
+			return err
+		}
+		canonical := requested.String()
 		pendingPath, isPending := pendingAdds[canonical]
 		managedPath, isManaged := managedSet[canonical]
 		if !isPending && !isManaged {
@@ -518,6 +517,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 			"unenrolled":        unenrolled,
 		})
 	}
+	priorExcluded := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
 	state.PendingAdds = pathsToStrings(mapPathValues(pendingAdds))
 	state.PendingRemoves = removes
 	excludePath, err := repository.InfoExcludePath(ctx)
@@ -525,7 +525,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 		return err
 	}
 	remainingManaged := managedForExclusion(state, stringsToPaths(state.PendingAdds), nil)
-	plan, err := exclude.Build(
+	plan, err := exclude.BuildForWorkspace(repository.Root,
 		excludePath,
 		state.Exclude.BlockID,
 		remainingManaged,
@@ -533,7 +533,7 @@ func (a App) Remove(ctx context.Context, options RemoveOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := exclude.Apply(plan); err != nil {
+	if err := a.applyExclusions(plan, priorExcluded); err != nil {
 		return err
 	}
 	if err := a.verifyExclusion(ctx, repository, remainingManaged); err != nil {
@@ -584,9 +584,11 @@ func (a App) trackedPathDecision(ctx context.Context, path pathmodel.Path, skipT
 	return value == "skip", nil
 }
 
-func collisionPortability(paths []pathmodel.Path) error {
-	if err := collision.PrivatePortabilityConflicts(paths, true); err != nil {
-		return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+func validateAssetDestinations(workspace, checkout string, current, incoming []pathmodel.Path) error {
+	for _, root := range []string{workspace, checkout} {
+		if err := collision.ValidateDestination(root, current, incoming); err != nil {
+			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+		}
 	}
 	return nil
 }
@@ -625,6 +627,8 @@ type Status struct {
 }
 
 func (a App) Status(ctx context.Context, options StatusOptions) error {
+	a.Presenter.Phase("Inspecting managed assets", -1)
+	defer a.Presenter.Stop()
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -638,7 +642,7 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 		return err
 	}
 	status := Status{
-		SchemaVersion:       JSONSchemaVersion,
+		SchemaVersion:       jsonoutput.SchemaVersion,
 		Linked:              true,
 		LinkID:              state.LinkID,
 		PublicBranch:        branch,
@@ -718,20 +722,15 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	for _, path := range unexcluded {
 		status.ExclusionFailures = append(status.ExclusionFailures, path.String())
 	}
-	ignoreCase, present, err := repository.EffectiveIgnoreCase(ctx)
-	if err != nil {
-		return err
-	}
-	if !present {
-		// Status is read-only, so it does not create a filesystem case probe.
-		// The conservative policy avoids hiding a possible collision.
-		ignoreCase = true
-	}
 	publicPaths, err := repository.TrackedPaths(ctx)
 	if err != nil {
 		return err
 	}
-	for _, conflict := range collision.Detect(publicPaths, excludedPaths, ignoreCase) {
+	ownershipConflicts, ownershipErr := collision.DetectObserved(repository.Root, publicPaths, excludedPaths)
+	if ownershipErr != nil {
+		return ownershipErr
+	}
+	for _, conflict := range ownershipConflicts {
 		status.PathConflicts = append(status.PathConflicts, conflict.Error())
 	}
 	sort.Strings(status.WorkspaceModified)
@@ -742,6 +741,7 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if a.JSON {
 		return a.write(status)
 	}
+	a.Presenter.Stop()
 	if options.Short {
 		_, err := fmt.Fprintf(a.Out, "linked=%t initialized=%t managed=%d modified=%d missing=%d conflicts=%d pending_recovery=%t\n",
 			status.Linked,
@@ -758,7 +758,8 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if status.PrivateAhead != nil && status.PrivateBehind != nil {
 		aheadBehind = fmt.Sprintf("%d ahead, %d behind", *status.PrivateAhead, *status.PrivateBehind)
 	}
-	if _, err = fmt.Fprintf(a.Out, "Link:\n  Linked repository:   %s\n  Linked branch:       %s\n  Initialized:         %s\n",
+	if _, err = fmt.Fprintf(a.Out, "%s\n  Linked repository:   %s\n  Linked branch:       %s\n  Initialized:         %s\n",
+		a.Presenter.Out("Link:", presentation.Result),
 		status.PrivateRepository,
 		valueOr(status.PrivateBranch, "discover on first sync"),
 		boolState(status.PrivateInitialized),
@@ -770,7 +771,8 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 			return err
 		}
 	}
-	if _, err = fmt.Fprintf(a.Out, "\nProject workspace:\n  Branch:               %s\n  Merge protection:    %s\n",
+	if _, err = fmt.Fprintf(a.Out, "\n%s\n  Branch:               %s\n  Merge protection:    %s\n",
+		a.Presenter.Out("Project workspace:", presentation.Result),
 		valueOr(status.PublicBranch, "detached HEAD"),
 		boolState(status.MergeProtection.Enabled),
 	); err != nil {
@@ -788,13 +790,15 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 	if status.PrivateHeadMismatch {
 		privateHeadStatus = fmt.Sprintf("mismatch (expected %s, actual %s)", valueOr(status.ExpectedPrivateHead, "unborn"), valueOr(status.ActualPrivateHead, "unborn"))
 	}
-	_, err = fmt.Fprintf(a.Out, "\nPrivate files:\n  Managed:              %d\n  Modified locally:     %d\n  Missing locally:      %d\n  Pending additions:    %d\n  Pending removals:     %d\n  Cached remote state:  %s\n\nHealth:\n  Private HEAD binding:  %s\n  Path conflicts:       %d\n  Exclusion failures:   %d\n  Pending recovery:     %s\n",
+	_, err = fmt.Fprintf(a.Out, "\n%s\n  Managed:              %d\n  Modified locally:     %d\n  Missing locally:      %d\n  Pending additions:    %d\n  Pending removals:     %d\n  Cached remote state:  %s\n\n%s\n  Private HEAD binding:  %s\n  Path conflicts:       %d\n  Exclusion failures:   %d\n  Pending recovery:     %s\n",
+		a.Presenter.Out("Private files:", presentation.Result),
 		status.ManagedFiles,
 		len(status.WorkspaceModified),
 		len(status.WorkspaceMissing),
 		len(status.PendingAdds),
 		len(status.PendingRemovals),
 		aheadBehind,
+		a.Presenter.Out("Health:", presentation.Result),
 		privateHeadStatus,
 		len(status.PathConflicts),
 		len(status.ExclusionFailures),
@@ -804,13 +808,19 @@ func (a App) Status(ctx context.Context, options StatusOptions) error {
 }
 
 type UnlinkOptions struct {
-	Force              bool
-	RemoveFiles        bool
-	ApproveRemoveFiles bool
-	RemovePrivateClone bool
+	Force                  bool
+	RemoveFiles            bool
+	ApproveRemoveFiles     bool
+	DiscardUnsyncedChanges bool
+	RemovePrivateClone     bool
 }
 
 func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
+	a.Presenter.Phase("Checking unlink safeguards", -1)
+	defer a.Presenter.Stop()
+	if (options.ApproveRemoveFiles || options.DiscardUnsyncedChanges) && !options.RemoveFiles {
+		return spaserr.Wrap(spaserr.KindInvalidUsage, fmt.Errorf("--approve-remove-files and --discard-unsynced-changes require --remove-files"))
+	}
 	repository, state, err := a.linked(ctx)
 	if err != nil {
 		return err
@@ -865,9 +875,24 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 	if err != nil {
 		return err
 	}
+	excludePath, err := repository.InfoExcludePath(ctx)
+	if err != nil {
+		return err
+	}
+	plan, err := exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, nil)
+	if err != nil {
+		return err
+	}
 	if options.RemoveFiles {
+		if err := a.validateUnlinkOwnership(ctx, repository, removePaths); err != nil {
+			return err
+		}
+		snapshots, unsynced, err := a.inspectUnlinkFiles(ctx, repository.Root, state, removePaths)
+		if err != nil {
+			return err
+		}
 		if !options.ApproveRemoveFiles {
-			approved, err := a.Prompt.Confirm(ctx, "Remove every SPAS-managed workspace file?", false, false)
+			approved, err := a.Prompt.Confirm(ctx, "Remove every SPAS-managed workspace file? Use --approve-remove-files to approve.", false, false)
 			if err != nil {
 				return err
 			}
@@ -875,25 +900,45 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 				return fmt.Errorf("managed-file removal declined")
 			}
 		}
+		if len(unsynced) > 0 && !options.DiscardUnsyncedChanges {
+			approved, err := a.Prompt.Confirm(ctx, fmt.Sprintf("Discard unsynchronized changes in %s? These bytes cannot be restored by SPAS. Use --discard-unsynced-changes to approve.", strings.Join(pathsToStrings(unsynced), ", ")), false, false)
+			if err != nil {
+				return err
+			}
+			if !approved {
+				return fmt.Errorf("unsynchronized-file discard declined")
+			}
+		}
+		// Prompts may take arbitrarily long. Recheck the whole cleanup before
+		// deleting anything, then bind each removal to its inspected file state.
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		plan, err = exclude.BuildForWorkspace(repository.Root, excludePath, state.Exclude.BlockID, nil)
+		if err != nil {
+			return err
+		}
+		if err := a.validateUnlinkOwnership(ctx, repository, removePaths); err != nil {
+			return err
+		}
+		if err := verifyUnlinkSnapshots(repository.Root, removePaths, snapshots); err != nil {
+			return err
+		}
 		// Remove files before metadata. If a later unlink step fails, the link
 		// and its exclusions remain recoverable and a subsequent sync can
 		// restore files that already existed in the private repository.
+		a.Presenter.Phase("Removing workspace assets", len(removePaths))
 		for _, path := range removePaths {
-			if err := filesync.RemoveManaged(repository.Root, path); err != nil {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+			if err := filesync.RemoveManagedIfUnchanged(repository.Root, path, expectedFilesyncSnapshot(snapshots[path.String()])); err != nil {
 				return err
 			}
 		}
 	}
 
-	excludePath, err := repository.InfoExcludePath(ctx)
-	if err != nil {
-		return err
-	}
-	plan, err := exclude.Build(excludePath, state.Exclude.BlockID, nil)
-	if err != nil {
-		return err
-	}
-	if err := exclude.Apply(plan); err != nil {
+	if err := a.applyExclusions(plan, expectedExclusions(state)...); err != nil {
 		return err
 	}
 	rollbackMetadata := func(primary error) error {
@@ -940,13 +985,25 @@ func (a App) Unlink(ctx context.Context, options UnlinkOptions) error {
 func unlinkWorkspacePaths(state linkstate.State) ([]pathmodel.Path, error) {
 	values := append([]string{}, state.ManagedPaths...)
 	values = append(values, state.PendingAdds...)
+	values = append(values, state.PendingRemovalPaths()...)
 	if state.ActiveMerge != nil {
 		values = append(values, state.ActiveMerge.ConflictPaths...)
 		values = append(values, state.ActiveMerge.RemainingPendingAdds...)
+		values = append(values, state.ActiveMerge.MaterializationPaths...)
+		values = append(values, state.ActiveMerge.RecoveryPaths...)
+		for _, removal := range state.ActiveMerge.RemainingPendingRemoves {
+			values = append(values, removal.Path)
+		}
 	}
 	if state.Materializing != nil {
 		values = append(values, state.Materializing.ExcludedPaths...)
 		values = append(values, state.Materializing.RemainingPendingAdds...)
+		// ExcludedPaths records accepted ownership. FinalPaths also contains
+		// skipped remote files whose workspace counterparts remain unmanaged.
+		values = append(values, state.Materializing.RecoveryPaths...)
+		for _, removal := range state.Materializing.RemainingPendingRemoves {
+			values = append(values, removal.Path)
+		}
 	}
 	set := make(map[string]pathmodel.Path, len(values))
 	for _, value := range values {
@@ -1033,7 +1090,7 @@ func (a App) validateRepositoryIdentity(state linkstate.State) error {
 	return nil
 }
 
-func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]pathmodel.Path, error) {
+func (a App) expandPaths(workspaceRoot string, values []string) ([]pathmodel.Path, error) {
 	set := make(map[string]pathmodel.Path)
 	observer := pathmodel.NewObserver(workspaceRoot)
 	for _, value := range values {
@@ -1050,12 +1107,6 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 		}
 		if info.Mode().IsRegular() {
-			if err := pathmodel.ValidatePathLength(workspaceRoot, path); err != nil {
-				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(privateRoot, path); err != nil {
-				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
 			if err := privategit.ValidateManagedPath(path); err != nil {
 				return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
@@ -1089,12 +1140,6 @@ func (a App) expandPaths(workspaceRoot, privateRoot string, values []string) ([]
 			}
 			managed, err := observer.Path(current)
 			if err != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(workspaceRoot, managed); err != nil {
-				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-			}
-			if err := pathmodel.ValidatePathLength(privateRoot, managed); err != nil {
 				return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 			}
 			if err := privategit.ValidateManagedPath(managed); err != nil {
@@ -1205,28 +1250,19 @@ func (a App) planMergeProtection(ctx context.Context, repository publicgit.Repos
 	}
 }
 
-func (a App) casePolicy(ctx context.Context, repository publicgit.Repository) (bool, error) {
+func (a App) warnCaseConfig(ctx context.Context, repository publicgit.Repository) error {
 	configValue, present, err := repository.EffectiveIgnoreCase(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	filesystemValue, err := repository.FilesystemIgnoresCase()
 	if err != nil {
-		return false, err
+		return err
 	}
 	if present && configValue != filesystemValue {
-		if err := a.warnf(
-			"warning: Git core.ignoreCase=%t disagrees with the public workspace filesystem; SPAS will use case-insensitive collision checks\n",
-			configValue,
-		); err != nil {
-			return false, err
-		}
-		return true, nil
+		return a.warnf("warning: Git core.ignoreCase=%t disagrees with the public workspace filesystem; SPAS will use native filesystem collision checks\n", configValue)
 	}
-	if !present {
-		return filesystemValue, nil
-	}
-	return configValue, nil
+	return nil
 }
 
 func (a App) requirePrimarySingleWorktree(ctx context.Context, repository publicgit.Repository) error {
@@ -1265,20 +1301,15 @@ func (a App) warnf(format string, arguments ...any) error {
 	if a.JSON || a.Err == nil {
 		return nil
 	}
+	format = strings.Replace(format, "warning:", a.Presenter.Err("warning:", presentation.Warning), 1)
 	_, err := fmt.Fprintf(a.Err, format, arguments...)
 	return err
 }
 
 func (a App) write(value any) error {
+	a.Presenter.Stop()
 	if a.JSON {
-		if typed, ok := value.(map[string]any); ok {
-			if _, exists := typed["schemaVersion"]; !exists {
-				typed["schemaVersion"] = JSONSchemaVersion
-			}
-		}
-		encoder := json.NewEncoder(a.Out)
-		encoder.SetEscapeHTML(false)
-		return encoder.Encode(value)
+		return jsonoutput.Write(a.Out, value)
 	}
 	switch typed := value.(type) {
 	case map[string]any:
@@ -1289,12 +1320,12 @@ func (a App) write(value any) error {
 		sort.Strings(keys)
 		for _, key := range keys {
 			item := typed[key]
-			if _, err := fmt.Fprintf(a.Out, "%s: %v\n", humanize(key), item); err != nil {
+			if _, err := fmt.Fprintf(a.Out, "%s %v\n", a.Presenter.Out(humanize(key)+":", presentation.Result), item); err != nil {
 				return err
 			}
 		}
 	default:
-		return json.NewEncoder(a.Out).Encode(value)
+		return jsonoutput.Write(a.Out, value)
 	}
 	return nil
 }
@@ -1363,10 +1394,10 @@ func pathsToStrings(paths []pathmodel.Path) []string {
 	return result
 }
 
-func canonicalSet(paths []pathmodel.Path, ignoreCase bool) map[string]pathmodel.Path {
+func pathIndex(paths []pathmodel.Path) map[string]pathmodel.Path {
 	result := make(map[string]pathmodel.Path, len(paths))
 	for _, path := range paths {
-		result[pathmodel.Canonical(path, ignoreCase)] = path
+		result[path.String()] = path
 	}
 	return result
 }
@@ -1383,10 +1414,21 @@ func authoritativeManagedPath(root, observed string, authoritative pathmodel.Pat
 	authoritativeInfo, authoritativeErr := os.Lstat(stored)
 	if requestedErr == nil && authoritativeErr == nil {
 		if os.SameFile(requestedInfo, authoritativeInfo) {
-			return authoritative, nil
+			observer := pathmodel.NewObserver(root)
+			requestedEntry, err := observer.Path(observed)
+			if err != nil {
+				return "", spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
+			storedEntry, err := observer.Path(stored)
+			if err != nil {
+				return "", spaserr.Wrap(spaserr.KindUnsupportedPath, err)
+			}
+			if requestedEntry == storedEntry {
+				return authoritative, nil
+			}
 		}
 		return "", spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf(
-			"%q and privately managed path %q are distinct files whose names collide under the current case policy",
+			"%q and privately managed path %q are distinct directory entries; select the exact managed spelling",
 			observed, authoritative,
 		))
 	}
@@ -1421,4 +1463,30 @@ func boolState(value bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func resolveNativeSelection(root string, requested pathmodel.Path, known []pathmodel.Path) (pathmodel.Path, error) {
+	for _, path := range known {
+		if path == requested {
+			return requested, nil
+		}
+	}
+	keys, err := pathmodel.DestinationKeys(root, append(append([]pathmodel.Path{}, known...), requested))
+	if err != nil {
+		return "", err
+	}
+	var found pathmodel.Path
+	for _, path := range known {
+		if keys[path] != keys[requested] {
+			continue
+		}
+		if found != "" && found != path {
+			return "", fmt.Errorf("%q aliases multiple managed paths: %q and %q", requested, found, path)
+		}
+		found = path
+	}
+	if found != "" {
+		return found, nil
+	}
+	return requested, nil
 }

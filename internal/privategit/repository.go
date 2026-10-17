@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +23,6 @@ import (
 	"github.com/getspas/spas/internal/limits"
 	"github.com/getspas/spas/internal/pathmodel"
 	"github.com/getspas/spas/internal/spaserr"
-	"golang.org/x/text/unicode/norm"
 )
 
 type Repository struct {
@@ -84,6 +84,7 @@ func (r Repository) PrepareClone(ctx context.Context, remoteURL, requestedBranch
 
 	cloneArgs := []string{
 		"-c", "core.autocrlf=false",
+		"-c", "core.precomposeUnicode=false",
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
@@ -252,6 +253,32 @@ func (r Repository) MergeRemote(ctx context.Context, branch string) (bool, error
 		return false, err
 	}
 	return before != after, nil
+}
+
+// MergeTree previews Git's result without changing HEAD, index, or files.
+// Conflict trees are also inspected before Git may materialize conflict files.
+func (r Repository) MergeTree(ctx context.Context, localHead, remoteHead string) (string, error) {
+	if localHead == "" {
+		return remoteHead, nil
+	}
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("merge-tree", "--write-tree", "--no-messages", "-z", localHead, remoteHead)...)
+	if err != nil {
+		if code, ok := gitexec.ExitCode(err); !ok || code != 1 {
+			return "", fmt.Errorf("preview private merge: %w", err)
+		}
+	}
+	tree, _, found := bytes.Cut(result.Stdout, []byte{0})
+	if !found || len(tree) == 0 {
+		return "", fmt.Errorf("preview private merge: Git returned no result tree")
+	}
+	return string(tree), nil
+}
+
+func (r Repository) RestoreUnbornBranch(ctx context.Context, branch, createdHead string) error {
+	if _, err := r.Git.Run(ctx, r.Path, r.safeArgs("update-ref", "--no-deref", "-d", "refs/heads/"+branch, createdHead)...); err != nil {
+		return fmt.Errorf("restore unborn private branch: %w", err)
+	}
+	return nil
 }
 
 func (r Repository) Push(ctx context.Context, branch string) error {
@@ -533,6 +560,53 @@ func (r Repository) TreePaths(ctx context.Context, revision string) ([]pathmodel
 	return paths, nil
 }
 
+// FileIdentity records the contents and executable state in a committed tree.
+type FileIdentity struct {
+	ObjectID   string
+	Executable bool
+}
+
+func (r Repository) TreeFiles(ctx context.Context, revision string) (map[pathmodel.Path]FileIdentity, error) {
+	result, err := r.Git.Run(ctx, r.Path, r.safeArgs("ls-tree", "-r", "-l", "-z", "--end-of-options", revision)...)
+	if err != nil {
+		return nil, fmt.Errorf("list private tree %q: %w", revision, err)
+	}
+	entries, err := parseTree(result.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[pathmodel.Path]FileIdentity, len(entries))
+	for _, entry := range entries {
+		if entry.Type != "blob" || (entry.Mode != "100644" && entry.Mode != "100755") {
+			return nil, spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("private path %q uses unsupported Git mode %s", entry.Path, entry.Mode))
+		}
+		files[entry.Path] = FileIdentity{ObjectID: entry.ObjectID, Executable: entry.Mode == "100755"}
+	}
+	return files, nil
+}
+
+// BlobDigest hashes committed contents without capturing the whole blob or
+// consulting the mutable checkout. Blob bytes never reach command output.
+func (r Repository) BlobDigest(ctx context.Context, objectID string) ([32]byte, error) {
+	hash := sha256.New()
+	runner := r.Git
+	runner.NonInteractive = true
+	runner.Stdout = hash
+	runner.Stderr = io.Discard
+	if _, err := runner.RunStreaming(ctx, r.Path, r.safeArgs("cat-file", "blob", objectID)...); err != nil {
+		var exitErr *gitexec.ExitError
+		if errors.As(err, &exitErr) {
+			diagnostic := *exitErr
+			diagnostic.Stdout = ""
+			err = &diagnostic
+		}
+		return [32]byte{}, fmt.Errorf("hash private blob %q: %w", objectID, err)
+	}
+	var digest [32]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
+}
+
 func (r Repository) StagedPaths(ctx context.Context) ([]pathmodel.Path, error) {
 	// Selection is per path: a rename exposes both the deleted source and the
 	// added destination, independently of Git's rename-detection heuristics.
@@ -550,8 +624,9 @@ func (r Repository) StreamStagedDiff(
 	stat bool,
 	paths []pathmodel.Path,
 	output io.Writer,
+	color string,
 ) error {
-	args := r.safeArgs("--literal-pathspecs", "--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--cached")
+	args := r.safeArgs("--literal-pathspecs", "--no-pager", "diff", "--color="+color, "--no-ext-diff", "--no-textconv", "--cached")
 	if stat {
 		args = append(args, "--stat")
 	}
@@ -573,7 +648,48 @@ func (r Repository) IsClean(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return len(result.Stdout) == 0, nil
+	if len(result.Stdout) == 0 {
+		return true, nil
+	}
+	records := bytes.Split(result.Stdout, []byte{0})
+	for _, record := range records {
+		if len(record) > 0 && !bytes.HasPrefix(record, []byte("? ")) {
+			return false, nil
+		}
+	}
+	// Git enumeration may expose a different native spelling from its index,
+	// notably decomposed names on HFS+. Ignore only proven directory-entry
+	// aliases of indexed paths; another hard-link name is still untracked.
+	tracked, err := r.TrackedPaths(ctx)
+	if err != nil {
+		return false, err
+	}
+	observer := pathmodel.NewObserver(r.Path)
+	entries := make(map[pathmodel.Path]bool, len(tracked))
+	for _, path := range tracked {
+		entry, err := observer.Path(path.OSPath(r.Path))
+		if err != nil {
+			return false, err
+		}
+		entries[entry] = true
+	}
+	for _, record := range records {
+		if len(record) == 0 {
+			continue
+		}
+		path, err := parsePrivatePath(string(record[2:]))
+		if err != nil {
+			return false, nil
+		}
+		entry, err := observer.Path(path.OSPath(r.Path))
+		if err != nil {
+			return false, err
+		}
+		if !entries[entry] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r Repository) UnmergedPaths(ctx context.Context) ([]pathmodel.Path, error) {
@@ -899,9 +1015,6 @@ func (r Repository) ValidateTree(ctx context.Context, revision string) error {
 		if (entry.Mode != "100644" && entry.Mode != "100755") || entry.Type != "blob" {
 			return spaserr.Wrap(spaserr.KindUnsupportedPath, fmt.Errorf("private path %q uses unsupported Git mode %s", entry.Path, entry.Mode))
 		}
-		if err := pathmodel.ValidatePathLength(r.Path, entry.Path); err != nil {
-			return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
-		}
 		if err := ValidateManagedPath(entry.Path); err != nil {
 			return err
 		}
@@ -920,8 +1033,8 @@ func (r Repository) ValidateTree(ctx context.Context, revision string) error {
 	if lfsPath != "" {
 		return fmt.Errorf("private path %q is a Git LFS pointer; Git LFS is not supported in the current implementation", lfsPath)
 	}
-	if err := portabilityDuplicates(paths); err != nil {
-		return err
+	if err := collision.ValidateDestination(r.Path, paths, nil); err != nil {
+		return spaserr.Wrap(spaserr.KindUnsupportedPath, err)
 	}
 	return nil
 }
@@ -1102,6 +1215,7 @@ func (r Repository) verifyPreparedResult(ctx context.Context, expected InitResul
 func (r Repository) verifySafetyConfig(ctx context.Context) error {
 	settings := [][2]string{
 		{"core.autocrlf", "false"},
+		{"core.precomposeUnicode", "false"},
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
@@ -1133,6 +1247,7 @@ func (r Repository) verifySafetyConfig(ctx context.Context) error {
 func (r Repository) applySafetyConfig(ctx context.Context) error {
 	settings := [][2]string{
 		{"core.autocrlf", "false"},
+		{"core.precomposeUnicode", "false"},
 		{"core.fsmonitor", "false"},
 		{"core.hooksPath", r.hooksDir()},
 		{"core.attributesFile", r.attributesFile()},
@@ -1361,6 +1476,7 @@ func (r Repository) prepareSafetyFiles() error {
 func (r Repository) safeArgs(args ...string) []string {
 	prefix := []string{
 		"-c", "core.autocrlf=false",
+		"-c", "core.precomposeUnicode=false",
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=" + r.hooksDir(),
 		"-c", "core.attributesFile=" + r.attributesFile(),
@@ -1445,15 +1561,16 @@ func parseTree(output []byte) ([]treeEntry, error) {
 	return entries, nil
 }
 
-// parsePrivatePath validates one path read back from the private Git index or
-// tree. The raw spelling must already be NFC: pathmodel.Parse silently
-// normalizes, and a silently renormalized path would no longer match the Git
-// entry it came from when used as a pathspec.
+// parsePrivatePath preserves the exact spelling supplied by Git.
 func parsePrivatePath(raw string) (pathmodel.Path, error) {
-	if raw != norm.NFC.String(raw) {
-		return "", fmt.Errorf("path %q is not in Unicode NFC form and is not portable across platforms", raw)
+	path, err := pathmodel.Parse(raw)
+	if err != nil {
+		return "", err
 	}
-	return pathmodel.Parse(raw)
+	if path.String() != raw {
+		return "", fmt.Errorf("Git path %q cannot be represented without changing its identity", raw)
+	}
+	return path, nil
 }
 
 func parsePaths(output []byte) ([]pathmodel.Path, error) {
@@ -1470,8 +1587,4 @@ func parsePaths(output []byte) ([]pathmodel.Path, error) {
 		paths = append(paths, path)
 	}
 	return paths, nil
-}
-
-func portabilityDuplicates(paths []pathmodel.Path) error {
-	return collision.PrivatePortabilityConflicts(paths, true)
 }

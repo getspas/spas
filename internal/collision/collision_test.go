@@ -1,111 +1,81 @@
 package collision
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getspas/spas/internal/pathmodel"
 )
 
-func TestDetect(t *testing.T) {
+func TestDetectNative(t *testing.T) {
 	t.Parallel()
-
-	public := paths(t, ".env", "config", "docs/Architecture.md", ".secret/public.json")
-	private := paths(t, ".env", "config/private.json", "docs/ARCHITECTURE.md", ".secret/private.json")
-
-	got := Detect(public, private, true)
-	if len(got) != 3 {
-		t.Fatalf("Detect() returned %d collisions: %#v", len(got), got)
-	}
-	if got[0].Kind != TrackedPath || got[1].Kind != FileDirectory || got[2].Kind != CaseInsensitive {
-		t.Fatalf("Detect() kinds = %v, %v, %v", got[0].Kind, got[1].Kind, got[2].Kind)
+	root := t.TempDir()
+	public := paths(t, ".env", "config", ".secret/public.json")
+	private := paths(t, ".env", "config/private.json", ".secret/private.json")
+	got, err := DetectNative(root, public, private)
+	if err != nil || len(got) != 2 || got[0].Kind != TrackedPath || got[1].Kind != FileDirectory {
+		t.Fatalf("DetectNative() = %#v, %v", got, err)
 	}
 }
 
-func TestSharedDirectoryIsNotConflict(t *testing.T) {
+func TestNativeDestinationEquivalence(t *testing.T) {
 	t.Parallel()
-
-	got := Detect(paths(t, ".secret/public.json"), paths(t, ".secret/private.json"), true)
-	if len(got) != 0 {
-		t.Fatalf("Detect() = %#v, want no conflicts", got)
+	for _, names := range [][]string{{"Plan", "plan"}, {"café", "cafe\u0301"}, {"straße", "strasse"}, {"İ", "i"}} {
+		t.Run(names[0], func(t *testing.T) {
+			root := t.TempDir()
+			first, err := os.OpenFile(filepath.Join(root, names[0]), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.Close()
+			second, err := os.OpenFile(filepath.Join(root, names[1]), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			aliases := errors.Is(err, os.ErrExist)
+			if err != nil && !aliases {
+				t.Fatal(err)
+			}
+			if second != nil {
+				second.Close()
+			}
+			pair := paths(t, names...)
+			got, err := DetectNative(root, pair[:1], pair[1:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(got) == 1) != aliases {
+				t.Fatalf("native collisions = %#v, aliases=%t", got, aliases)
+			}
+			err = ValidateDestination(root, pair, nil)
+			if (err != nil) != aliases {
+				t.Fatalf("simultaneous tree = %v, aliases=%t", err, aliases)
+			}
+			if err := ValidateDestination(root, pair[:1], pair[1:]); err != nil {
+				t.Fatalf("file rename: %v", err)
+			}
+			descendants := paths(t, names[1]+"/child")
+			err = ValidateDestination(root, pair[:1], descendants)
+			if (err != nil) != aliases {
+				t.Fatalf("file/directory transition = %v, aliases=%t", err, aliases)
+			}
+			if aliases && !strings.Contains(err.Error(), names[0]) {
+				t.Fatalf("collision does not identify paths: %v", err)
+			}
+		})
 	}
 }
 
-func TestParseCollapsesUnicodeNormalizationVariants(t *testing.T) {
+func TestNativeSharedDirectoryIsNotConflict(t *testing.T) {
 	t.Parallel()
-
-	// pathmodel.Parse normalizes to NFC, so two spellings that differ only in
-	// Unicode normalization are the same managed path and can never diverge.
-	composed := paths(t, "docs/café.md")
-	decomposed := paths(t, "docs/cafe\u0301.md")
-	if composed[0] != decomposed[0] {
-		t.Fatalf("Parse() produced distinct paths %q and %q for normalization variants", composed[0], decomposed[0])
+	root := t.TempDir()
+	current := paths(t, "Folder/one.txt")
+	incoming := paths(t, "folder/two.txt")
+	if err := ValidateDestination(root, current, incoming); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestPrivatePortabilityConflictsRejectsUnicodeNormalizationCollision(t *testing.T) {
-	t.Parallel()
-
-	// Defense in depth: raw paths that bypassed Parse (for example read
-	// directly from a Git tree) must still collide on normalization.
-	raw := []pathmodel.Path{pathmodel.Path("docs/café.md"), pathmodel.Path("docs/cafe\u0301.md")}
-	err := PrivatePortabilityConflicts(raw, false)
-	if err == nil {
-		t.Fatal("PrivatePortabilityConflicts() error = nil, want Unicode normalization conflict")
-	}
-}
-
-func TestPrivatePortabilityConflictsRejectsCaseFoldedFileDirectoryCollision(t *testing.T) {
-	t.Parallel()
-
-	err := PrivatePortabilityConflicts(paths(t, "Foo", "foo/child.txt"), true)
-	if err == nil {
-		t.Fatal("PrivatePortabilityConflicts() error = nil, want file/directory conflict")
-	}
-}
-
-func TestPrivateRevisionCompatibilityAllowsCaseOnlyRename(t *testing.T) {
-	t.Parallel()
-
-	if err := PrivateRevisionCompatibility(paths(t, "docs/Foo.md"), paths(t, "docs/foo.md"), true); err != nil {
-		t.Fatalf("PrivateRevisionCompatibility() error = %v, want case-only rename to be allowed", err)
-	}
-}
-
-func TestPrivateRevisionCompatibilityRejectsFileDirectoryTransition(t *testing.T) {
-	t.Parallel()
-
-	if err := PrivateRevisionCompatibility(paths(t, "Foo"), paths(t, "foo/child.txt"), true); err == nil {
-		t.Fatal("PrivateRevisionCompatibility() error = nil, want file/directory transition rejection")
-	}
-	if err := PrivateRevisionCompatibility(paths(t, "foo/child.txt"), paths(t, "Foo"), true); err == nil {
-		t.Fatal("PrivateRevisionCompatibility() inverse error = nil, want file/directory transition rejection")
-	}
-}
-
-func TestPrivateRevisionCompatibilityAllowsSharedDirectoryAcrossRevisions(t *testing.T) {
-	t.Parallel()
-
-	if err := PrivateRevisionCompatibility(paths(t, "Folder/one.txt"), paths(t, "folder/two.txt"), true); err != nil {
-		t.Fatalf("PrivateRevisionCompatibility() error = %v, want shared directory to be allowed", err)
-	}
-}
-
-func TestPrivatePortabilityConflictsAllowsSharedDirectories(t *testing.T) {
-	t.Parallel()
-
-	if err := PrivatePortabilityConflicts(paths(t, "folder/one.txt", "Folder/two.txt"), true); err != nil {
-		t.Fatalf("PrivatePortabilityConflicts() error = %v, want shared directory to be allowed", err)
-	}
-}
-
-func TestDetectRejectsUnicodeNormalizationCollisionAcrossRepositories(t *testing.T) {
-	t.Parallel()
-
-	public := []pathmodel.Path{pathmodel.Path("docs/café.md")}
-	private := []pathmodel.Path{pathmodel.Path("docs/cafe\u0301.md")}
-	got := Detect(public, private, false)
-	if len(got) != 1 || got[0].Kind != PortablePath {
-		t.Fatalf("Detect() = %#v, want one cross-platform filesystem conflict", got)
+	if err := ValidateDestination(root, append(current, incoming...), nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

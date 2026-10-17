@@ -19,10 +19,12 @@ type Prompter struct {
 	Out         io.Writer
 	Interactive bool
 	AssumeYes   bool
+	// Before suspends terminal presentation for the full prompt/read operation.
+	Before func() func()
 }
 
 func Detect(in io.Reader, out io.Writer, nonInteractive bool) Prompter {
-	interactive := !nonInteractive && isTerminal(in) && isTerminalWriter(out)
+	interactive := !nonInteractive && IsTerminal(in) && IsTerminal(out)
 	return Prompter{In: in, Out: out, Interactive: interactive}
 }
 
@@ -35,6 +37,9 @@ func (p Prompter) Confirm(ctx context.Context, question string, recommended bool
 	}
 	if !p.Interactive {
 		return false, fmt.Errorf("%w: %s", ErrDecisionRequired, question)
+	}
+	if p.Before != nil {
+		defer p.Before()()
 	}
 	suffix := " [y/N]: "
 	if recommended {
@@ -68,6 +73,9 @@ func (p Prompter) Input(ctx context.Context, question string) (string, error) {
 	if !p.Interactive {
 		return "", fmt.Errorf("%w: %s", ErrDecisionRequired, question)
 	}
+	if p.Before != nil {
+		defer p.Before()()
+	}
 	if _, err := fmt.Fprint(p.Out, question+"\n> "); err != nil {
 		return "", err
 	}
@@ -88,6 +96,9 @@ func (p Prompter) Select(ctx context.Context, question string, options []Option)
 	}
 	if !p.Interactive {
 		return "", fmt.Errorf("%w: %s", ErrDecisionRequired, question)
+	}
+	if p.Before != nil {
+		defer p.Before()()
 	}
 	if _, err := fmt.Fprintln(p.Out, question); err != nil {
 		return "", err
@@ -166,12 +177,8 @@ func readLine(reader io.Reader) (string, error) {
 	}
 }
 
-func isTerminal(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	return ok && term.IsTerminal(int(file.Fd()))
-}
-
-func isTerminalWriter(writer io.Writer) bool {
-	file, ok := writer.(*os.File)
+// IsTerminal reports terminal attachment at the injected stream boundary.
+func IsTerminal(stream any) bool {
+	file, ok := stream.(*os.File)
 	return ok && term.IsTerminal(int(file.Fd()))
 }

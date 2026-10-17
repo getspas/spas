@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,5 +163,13 @@ func TestProbePublicIgnoresLocalGitConfig(t *testing.T) {
 	})
 	if err != nil || !isPublic {
 		t.Fatalf("ProbePublic(local repo config rewrite) = %v, %v, want true, nil", isPublic, err)
+	}
+}
+
+func TestProbePublicPropagatesStartFailure(t *testing.T) {
+	t.Parallel()
+	_, err := (Provider{}).ProbePublic(context.Background(), gitexec.Runner{Path: filepath.Join(t.TempDir(), "missing-git")}, provider.RepositoryRef{Canonical: "getspas/assets"})
+	if err == nil || !strings.Contains(err.Error(), "start git") {
+		t.Fatalf("ProbePublic(missing Git) = %v, want start error", err)
 	}
 }

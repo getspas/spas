@@ -14,7 +14,4 @@ const (
 	MaxPrivateTreeEntries       = 10_000
 	MaxPrivateTreeMetadataBytes = MaxCapturedGitStdoutBytes
 	MaxGitLFSPointerBytes       = 1024
-
-	MaxPathComponentBytes = 255
-	MaxWindowsPathLength  = 260
 )

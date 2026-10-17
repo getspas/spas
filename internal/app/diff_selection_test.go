@@ -60,7 +60,13 @@ func TestDiffSelectsAuthoritativePaths(t *testing.T) {
 					var output bytes.Buffer
 					instance.Out = &output
 					instance.JSON = format == "json"
-					opts := DiffOptions{Paths: []string{alias}, NameOnly: format == "names", Stat: format == "stat", Staged: staged}
+					selected := alias
+					if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(alias))); os.IsNotExist(err) {
+						selected = stored
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					opts := DiffOptions{Paths: []string{selected}, NameOnly: format == "names", Stat: format == "stat", Staged: staged}
 					if err := instance.Diff(t.Context(), opts); err != nil {
 						t.Fatal(err)
 					}
@@ -194,6 +200,14 @@ func TestStagedDiffSelectsRenamePaths(t *testing.T) {
 				if err := instance.Diff(t.Context(), opts); err != nil {
 					t.Fatal(err)
 				}
+				if test.selected != test.stored {
+					if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(test.selected))); os.IsNotExist(err) {
+						assertReadOnlyDiffOutput(t, output.String(), format, true, "", "")
+						return
+					} else if err != nil {
+						t.Fatal(err)
+					}
+				}
 				want := test.patch
 				if format == "json" {
 					var result struct {
@@ -244,7 +258,12 @@ func TestStagedDiffDisambiguatesCaseOnlyRename(t *testing.T) {
 			t.Fatalf("exact rename selection %q = %s, %v", selected, output.String(), err)
 		}
 	}
-	if err := instance.Diff(t.Context(), DiffOptions{Paths: []string{"DOCS/Architecture.md"}, Staged: true}); err == nil {
-		t.Fatal("ambiguous rename alias was accepted")
+	err := instance.Diff(t.Context(), DiffOptions{Paths: []string{"DOCS/Architecture.md"}, Staged: true})
+	if _, statErr := os.Stat(filepath.Join(root, "DOCS", "Architecture.md")); os.IsNotExist(statErr) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if err == nil {
+		t.Fatal("ambiguous existing rename alias was accepted")
 	}
 }

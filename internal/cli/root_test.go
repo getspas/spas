@@ -16,6 +16,7 @@ import (
 
 	"github.com/getspas/spas/internal/app"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/spaserr"
 	"github.com/getspas/spas/internal/version"
@@ -131,7 +132,7 @@ func TestMutatingCommandHelpExplainsBehaviorAndOneLineUse(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string][]string{
-		"link":   {"visibility probe", "--allow-public", "--dry-run", "One line", "--non-interactive"},
+		"link":   {"visibility probe", "warning without requiring approval", "--dry-run", "One line", "--non-interactive"},
 		"add":    {"local exclude file", "One line", "--non-interactive"},
 		"remove": {"does not", "--non-interactive"},
 		"sync":   {"never creates a commit in the project repository", "One line", "--non-interactive"},
@@ -251,8 +252,8 @@ func TestVersionCommands(t *testing.T) {
 				t.Fatalf("payload keys = %v, missing %q", payload, key)
 			}
 		}
-		if payload["schemaVersion"] != float64(app.JSONSchemaVersion) {
-			t.Fatalf("schemaVersion = %v, want %d", payload["schemaVersion"], app.JSONSchemaVersion)
+		if payload["schemaVersion"] != float64(jsonoutput.SchemaVersion) {
+			t.Fatalf("schemaVersion = %v, want %d", payload["schemaVersion"], jsonoutput.SchemaVersion)
 		}
 		if payload["version"] != version.Version || payload["commit"] != version.Commit || payload["date"] != version.Date {
 			t.Fatalf("payload = %+v, want version=%q commit=%q date=%q", payload, version.Version, version.Commit, version.Date)
@@ -300,7 +301,7 @@ func TestExecuteJSONErrorEnvelopeHasExactKeys(t *testing.T) {
 			t.Fatalf("error envelope = %#v, missing %q", payload, key)
 		}
 	}
-	if payload["schemaVersion"] != float64(app.JSONSchemaVersion) || payload["ok"] != false {
+	if payload["schemaVersion"] != float64(jsonoutput.SchemaVersion) || payload["ok"] != false {
 		t.Fatalf("error envelope = %#v", payload)
 	}
 	errorObject, ok := payload["error"].(map[string]any)
@@ -579,6 +580,13 @@ func TestTimeoutFlagExpiredDeadlineSurfacesOperationFailed(t *testing.T) {
 	}
 }
 
+func TestRemoteGitDeadlineIsAnOperationFailure(t *testing.T) {
+	err := spaserr.Wrap(spaserr.KindAuthNetwork, fmt.Errorf("fetch linked repository: %w", context.DeadlineExceeded))
+	if exitCode(err) != 1 || errorCode(err) != "operation_failed" {
+		t.Fatalf("deadline classification = %d/%s", exitCode(err), errorCode(err))
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
@@ -589,9 +597,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 func TestDoctorCommandUnlinked(t *testing.T) {
-	t.Parallel()
-
 	dir := t.TempDir()
+	for _, name := range []string{"HOME", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"} {
+		t.Setenv(name, dir)
+	}
 	var output bytes.Buffer
 	root := NewRootContext(context.Background(), strings.NewReader(""), &output, &output)
 	root.SetArgs([]string{"doctor", "--repo", dir})
@@ -615,8 +624,8 @@ func TestDoctorCommandUnlinked(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatalf("decode doctor json: %v\n%s", err, output.String())
 	}
-	if result.SchemaVersion != app.JSONSchemaVersion || !result.Healthy || result.Errors != 0 || result.Warnings != 1 {
-		t.Fatalf("doctor result = %#v, want healthy with 1 warning and schemaVersion %d", result, app.JSONSchemaVersion)
+	if result.SchemaVersion != jsonoutput.SchemaVersion || !result.Healthy || result.Errors != 0 || result.Warnings != 1 {
+		t.Fatalf("doctor result = %#v, want healthy with 1 warning and schemaVersion %d", result, jsonoutput.SchemaVersion)
 	}
 	foundWorkspaceWarning := false
 	for _, check := range result.Checks {

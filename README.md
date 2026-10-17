@@ -77,6 +77,36 @@ SPAS coordinates three distinct layers:
 
 ---
 
+### Filename Support
+
+SPAS accepts filename punctuation, device-name spellings, and trailing dots or
+spaces when supported by the host's Git and filesystem operations. For example,
+`notes:2026.md`, `CON`, and `draft*.txt` can be managed on Unix filesystems that
+represent them. Exclusions and Git operations treat these names literally.
+Windows rejects its reserved names and characters, alternate data streams, and
+trailing dots or spaces. An asset set accepted on one machine may fail on another;
+SPAS reports the failing path rather than renaming it.
+
+Paths must remain inside the workspace and be representable in SPAS state and
+exclusion rules: valid UTF-8 without control or Unicode format characters. Git
+metadata, SPAS's temporary directory, symlinks, submodules, LFS pointers, and Git
+control files remain unsupported. Exact Git path identities are preserved.
+Distinct case and Unicode spellings can coexist when both the workspace and
+managed checkout can represent them. SPAS checks native destination aliases,
+including file/directory conflicts, before applying assets; Git's
+`core.ignoreCase` setting does not decide filesystem equivalence.
+
+Path lengths follow the actual Git and filesystem operations on each machine.
+SPAS imposes no fixed component-byte or absolute-path ceiling. Support depends
+on both the workspace and managed checkout destinations, including their roots
+and Git configuration; a name that works on one machine may fail on another.
+Failures identify the operation and path; interrupted synchronization retains
+its recovery state. Tree-entry and metadata-size bounds still apply separately.
+[Schema contracts](wiki/Schemas.md)
+document the independent persisted-state and CLI JSON versions. State records
+exact ownership replacements for recovery and accepts only its current version,
+without migration.
+
 ## Installation
 
 Download the pre-compiled binary for your system from the [latest GitHub release](https://github.com/getspas/spas/releases/latest), rename it to `spas` (or `spas.exe` on Windows), and place it in your system `PATH`. On macOS and Linux, make it executable with `chmod +x spas`.
@@ -163,19 +193,89 @@ spas diff --stat
 | `spas completion` | Generate auto-completion scripts for Bash, Zsh, Fish, or PowerShell |
 | `spas version` | Display version, commit hash, and build metadata |
 
+### Unlink and Optional Cleanup
+
+`spas unlink` keeps workspace files and the managed checkout, removes SPAS's
+local exclusions, and reports files now eligible for project Git staging.
+To remove synchronized workspace files during unlink:
+
+```bash
+spas unlink --remove-files --approve-remove-files --non-interactive
+```
+
+Unsynchronized contents, executable changes, and never-synchronized additions
+need separate discard approval. Interactive cleanup names the affected files
+and asks for that approval. For unattended cleanup, inspect the files first and
+explicitly add `--discard-unsynced-changes`:
+
+```bash
+spas unlink --force --remove-files --approve-remove-files \
+  --discard-unsynced-changes --non-interactive
+```
+
+`--discard-unsynced-changes` requires `--remove-files`. `--yes`, `--force`, and
+general file-removal approval do not authorize unsynchronized discard. Missing
+approvals return exit code 4 before deleting files. `--force` permits abandoning
+pending synchronization; it does not bypass cleanup safety checks.
+
+Cleanup refuses the entire target set if project Git now tracks any target or
+the owned exclusion markers are malformed. It also rejects observed edits,
+executable changes, and unsupported file substitutions after inspection.
+Avoid concurrent editing or Git operations during cleanup: SPAS cannot lock out
+noncooperating tools between its checks and filesystem operations.
+
+If cleanup or unlink metadata updates fail, the link remains available for a
+retry. Already removed synchronized files can be restored by synchronization;
+approved discarded unsynchronized bytes cannot be reconstructed by SPAS.
+`--remove-private-clone` separately removes the internal checkout during unlink.
+If that optional cleanup fails after unlink succeeds, the command returns
+nonzero, states that the workspace is already unlinked, and names the retained
+checkout paths.
+
 ### Non-Interactive & CI Automation
 
-Pass `--json` and explicit policies to run SPAS in automated pipelines without interactive prompts:
+Pass `--json` and explicit policies to run SPAS in automated pipelines without SPAS prompts:
 
 ```bash
 spas sync --json \
+  --timeout 5m \
   --message "Update CI environment assets" \
   --conflict abort \
   --existing-exclude preserve \
   --merge-protection skip
 ```
 
+Provision Git credentials before the run. Unattended execution disables Git
+terminal and askpass prompts, uses batch mode for the default OpenSSH transport,
+and disables Git Credential Manager interaction. SSH requires a verified known
+host and a usable key or agent; HTTPS requires a helper that supplies stored
+credentials without interaction. Custom SSH commands and other credential
+helpers need their own unattended configuration; SPAS cannot control arbitrary
+helper dialogs. These controls also apply to nonterminal runs and implicit
+fetches when reading a partial project clone. SPAS does not change global Git
+or SSH settings.
+
+`--timeout` sets a caller-selected deadline; omitting it leaves no deadline.
+Cancellation and timeout stop unattended Git and its attached SSH/helper
+descendants. Detached helpers or external services remain outside SPAS's
+control. An interrupted push retains recovery state for the next `spas sync`.
+
 For complete details on all flags, exit codes, and policies, consult the [Command Reference](https://github.com/getspas/spas/wiki/Command-reference).
+
+Human output uses `--color=auto` by default, with separate capability checks for
+stdout and stderr. Automatic color is disabled for redirected destinations,
+non-interactive execution, CI, nonempty `NO_COLOR`, and unsupported terminals.
+Use `--color=always` to request color explicitly or `--color=never` for plain
+output. JSON, shell completion, `status --short`, and `diff --name-only` stay
+plain. Windows consoles require virtual-terminal processing already enabled;
+SPAS leaves console modes unchanged.
+
+`--progress=auto` shows real phases and available file counts on supported
+stderr terminals. `--progress=never` disables motion. Progress is independent
+of color and `NO_COLOR`, and commands with complete inputs can show it.
+Non-interactive, CI, redirected stderr, unsupported terminals, and machine
+output have no progress. Prompts suspend animation; Git output uses a stable
+phase line. SPAS clears progress on completion, failure, timeout, or cancellation.
 
 ---
 

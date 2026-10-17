@@ -9,13 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
 	"github.com/getspas/spas/internal/spaserr"
 )
@@ -440,7 +440,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
 		t.Fatalf("decode status: %v\n%s", err, output.String())
 	}
-	if status.SchemaVersion != JSONSchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
+	if status.SchemaVersion != jsonoutput.SchemaVersion || !status.Linked || !status.PrivateInitialized || status.ManagedFiles != 1 {
 		t.Fatalf("Status() = %#v", status)
 	}
 	if !reflect.DeepEqual(status.WorkspaceModified, []string{"docs/ARCHITECTURE.md"}) ||
@@ -468,8 +468,8 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &diff); err != nil {
 		t.Fatalf("decode diff: %v\n%s", err, output.String())
 	}
-	if diff.SchemaVersion != JSONSchemaVersion {
-		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, JSONSchemaVersion)
+	if diff.SchemaVersion != jsonoutput.SchemaVersion {
+		t.Fatalf("Diff() schemaVersion = %d, want %d", diff.SchemaVersion, jsonoutput.SchemaVersion)
 	}
 	if !reflect.DeepEqual(diff.ChangedPaths, []string{"docs/ARCHITECTURE.md"}) {
 		t.Fatalf("Diff() changed paths = %v", diff.ChangedPaths)
@@ -483,7 +483,7 @@ func TestStatusDiffAndDoctorAreReadOnlyAndOffline(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &doctor); err != nil {
 		t.Fatalf("decode doctor: %v\n%s", err, output.String())
 	}
-	if doctor.SchemaVersion != JSONSchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
+	if doctor.SchemaVersion != jsonoutput.SchemaVersion || !doctor.Healthy || doctor.Errors != 0 {
 		t.Fatalf("Doctor() = %#v", doctor)
 	}
 
@@ -1118,7 +1118,7 @@ func TestSyncRechecksCasePolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
-	if !strings.Contains(output.String(), "core.ignoreCase") || !strings.Contains(output.String(), "case-insensitive") {
+	if !strings.Contains(output.String(), "core.ignoreCase") || !strings.Contains(output.String(), "native filesystem") {
 		t.Fatalf("Sync() output has no case-policy warning:\n%s", output.String())
 	}
 }
@@ -1276,9 +1276,10 @@ func TestUnlinkRemoveFilesIncludesPendingAdditions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := instance.Unlink(ctx, UnlinkOptions{
-		Force:              true,
-		RemoveFiles:        true,
-		ApproveRemoveFiles: true,
+		Force:                  true,
+		RemoveFiles:            true,
+		ApproveRemoveFiles:     true,
+		DiscardUnsyncedChanges: true,
 	}); err != nil {
 		t.Fatalf("Unlink(remove pending add) error = %v", err)
 	}
@@ -1800,157 +1801,6 @@ func TestDoctorUnlinkedGitError(t *testing.T) {
 	}
 }
 
-func TestWindowsPathLengthPreflightRejectsWorkspaceRoot(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS != "windows" {
-		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
-	}
-
-	ctx := context.Background()
-	root := t.TempDir()
-	publicRoot := initializePublicRepository(t, root)
-	remote := filepath.Join(root, "private.git")
-	runGit(t, root, "init", "--bare", "-q", remote)
-
-	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
-	if err := os.MkdirAll(sub, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(sub, "secret.json")
-	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rel, err := filepath.Rel(publicRoot, target)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	instance, _ := testApp(t, publicRoot, root, remote)
-	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
-		t.Fatal(err)
-	}
-
-	err = instance.Add(ctx, AddOptions{
-		Paths:           []string{rel},
-		ExistingExclude: ExcludePreserve,
-		MergeProtection: MergeSkip,
-	})
-	if err == nil {
-		t.Fatal("Add() error = nil, want path length error on Windows")
-	}
-	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
-	}
-	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
-		t.Fatalf("Add() error = %v, want Windows limit error", err)
-	}
-}
-
-func TestWindowsPathLengthPreflightRejectsPrivateCloneRoot(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS != "windows" {
-		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
-	}
-
-	ctx := context.Background()
-	root := t.TempDir()
-	publicRoot := initializePublicRepository(t, root)
-	remote := filepath.Join(root, "private.git")
-	runGit(t, root, "init", "--bare", "-q", remote)
-
-	longDataDir := filepath.Join(root, strings.Repeat("d", 120), strings.Repeat("e", 100))
-	if err := os.MkdirAll(longDataDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	rel := "nested/secret.json"
-	target := filepath.Join(publicRoot, "nested", "secret.json")
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	instance, _ := testApp(t, publicRoot, root, remote)
-	instance.Store.DataDir = longDataDir
-
-	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, state, err := instance.linked(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = instance.Add(ctx, AddOptions{
-		Paths:           []string{rel},
-		ExistingExclude: ExcludePreserve,
-		MergeProtection: MergeSkip,
-	})
-	if err == nil {
-		t.Fatal("Add() error = nil, want private clone path length error on Windows")
-	}
-	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-		t.Fatalf("Add() error kind = %v, want KindUnsupportedPath", kind)
-	}
-	if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
-		t.Fatalf("Add() error = %v, want Windows limit error", err)
-	}
-	if !strings.Contains(err.Error(), "data") && !strings.Contains(err.Error(), "repos") {
-		t.Fatalf("Add() error = %v, want error naming private clone root %q", err, state.Private.LocalRepositoryPath)
-	}
-}
-
-func TestWindowsPathLengthPreflightRejectsSyncRemotePath(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS != "windows" {
-		t.Skipf("skipping Windows path length preflight test on %s", runtime.GOOS)
-	}
-
-	ctx := context.Background()
-	root := t.TempDir()
-	publicRoot := initializePublicRepository(t, root)
-	remote := filepath.Join(root, "private.git")
-	runGit(t, root, "init", "--bare", "-q", remote)
-
-	tempClone := filepath.Join(root, "temp-clone")
-	runGit(t, root, "clone", "-q", remote, tempClone)
-	runGit(t, tempClone, "config", "core.longpaths", "true")
-	runGit(t, tempClone, "config", "user.name", "SPAS Test")
-	runGit(t, tempClone, "config", "user.email", "spas@example.invalid")
-	longRel := filepath.Join(strings.Repeat("r", 100), strings.Repeat("s", 100), "remote.json")
-	fullTemp := filepath.Join(tempClone, longRel)
-	if err := os.MkdirAll(filepath.Dir(fullTemp), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(fullTemp, []byte("REMOTE=1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, tempClone, "add", "-A")
-	runGit(t, tempClone, "commit", "-q", "-m", "add long path")
-	runGit(t, tempClone, "push", "-q", "origin", "HEAD:refs/heads/main")
-
-	instance, _ := testApp(t, publicRoot, root, remote)
-	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
-		t.Fatal(err)
-	}
-
-	err := instance.Sync(ctx, SyncOptions{
-		Conflict:        ConflictAbort,
-		ExistingExclude: ExcludePreserve,
-		MergeProtection: MergeSkip,
-	})
-	if err == nil {
-		t.Fatal("Sync() error = nil, want path length error on Windows")
-	}
-	if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-		t.Fatalf("Sync() error = %v, kind = %v, want KindUnsupportedPath", err, kind)
-	}
-}
-
 func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 	t.Parallel()
 
@@ -1969,7 +1819,7 @@ func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 	state := loadState(t, instance, publicRoot)
 	state.ManagedPaths = []string{longPath}
 	// Exercise argument resolution with an actual old diff operand. Git's
-	// long-path support is independent of SPAS's enrollment preflight.
+	// long-path support is configured independently of SPAS.
 	runGit(t, publicRoot, "config", "core.longpaths", "true")
 	privateFile := filepath.Join(state.Private.LocalRepositoryPath, filepath.FromSlash(longPath))
 	if err := os.MkdirAll(filepath.Dir(privateFile), 0o700); err != nil {
@@ -1993,66 +1843,6 @@ func TestRemoveAndDiffAllowAlreadyEnrolledPathsExceedingLimit(t *testing.T) {
 	}
 }
 
-func TestLinuxMacAllowsPathLengthExceedingWindowsLimit(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skipf("skipping Linux/macOS long path test on Windows")
-	}
-
-	ctx := context.Background()
-	root := t.TempDir()
-	publicRoot := initializePublicRepository(t, root)
-	remote := filepath.Join(root, "private.git")
-	runGit(t, root, "init", "--bare", "-q", remote)
-
-	sub := filepath.Join(publicRoot, strings.Repeat("a", 100), strings.Repeat("b", 100))
-	if err := os.MkdirAll(sub, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(sub, "secret.json")
-	if err := os.WriteFile(target, []byte("SECRET=1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rel, err := filepath.Rel(publicRoot, target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(target) < 260 {
-		t.Fatalf("len(target) = %d, want >= 260", len(target))
-	}
-
-	instance, _ := testApp(t, publicRoot, root, remote)
-	if err := instance.Link(ctx, LinkOptions{Repository: "getspas/private-files", Branch: "main"}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := instance.Add(ctx, AddOptions{
-		Paths:           []string{rel},
-		ExistingExclude: ExcludePreserve,
-		MergeProtection: MergeSkip,
-	}); err != nil {
-		t.Fatalf("Add() error = %v, want nil on non-Windows", err)
-	}
-
-	if err := instance.Sync(ctx, SyncOptions{
-		Conflict:        ConflictAbort,
-		ExistingExclude: ExcludePreserve,
-		MergeProtection: MergeSkip,
-		Message:         "sync long path",
-	}); err != nil {
-		t.Fatalf("Sync() error = %v, want nil on non-Windows", err)
-	}
-
-	if err := instance.Diff(ctx, DiffOptions{Paths: []string{rel}}); err != nil {
-		t.Fatalf("Diff() error = %v, want nil on non-Windows", err)
-	}
-
-	if err := instance.Remove(ctx, RemoveOptions{Paths: []string{rel}}); err != nil {
-		t.Fatalf("Remove() error = %v, want nil on non-Windows", err)
-	}
-}
-
 func assertJSONContract(t *testing.T, output []byte, wantKeys []string) map[string]any {
 	t.Helper()
 	var doc map[string]any
@@ -2070,8 +1860,8 @@ func assertJSONContract(t *testing.T, output []byte, wantKeys []string) map[stri
 	if !reflect.DeepEqual(gotKeys, sortedWant) {
 		t.Fatalf("JSON top-level keys = %v, want %v\npayload = %s", gotKeys, sortedWant, string(output))
 	}
-	if sv, ok := doc["schemaVersion"].(float64); !ok || int(sv) != JSONSchemaVersion {
-		t.Fatalf("schemaVersion = %v, want %d", doc["schemaVersion"], JSONSchemaVersion)
+	if sv, ok := doc["schemaVersion"].(float64); !ok || int(sv) != jsonoutput.SchemaVersion {
+		t.Fatalf("schemaVersion = %v, want %d", doc["schemaVersion"], jsonoutput.SchemaVersion)
 	}
 	return doc
 }

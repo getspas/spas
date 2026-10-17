@@ -9,10 +9,9 @@ import (
 	"testing"
 
 	"github.com/getspas/spas/internal/gitexec"
-	"github.com/getspas/spas/internal/spaserr"
 )
 
-func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
+func TestAddPreservesDistinctUnicodeEntries(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -101,20 +100,6 @@ func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			state := loadState(t, instance, publicRoot)
-			unchanged := []string{
-				filepath.Join(instance.Store.ConfigDir, "links", state.LinkID+".json"),
-				filepath.Join(publicRoot, ".git", "info", "exclude"),
-				filepath.Join(publicRoot, ".git", "config"),
-				raw, nfc,
-			}
-			before := make(map[string][]byte)
-			for _, path := range unchanged {
-				before[path], err = os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
 			selection := raw
 			if test.nfc {
 				selection = nfc
@@ -123,20 +108,22 @@ func TestAddRejectsDistinctUnicodeEntries(t *testing.T) {
 				selection = assets
 			}
 			err = instance.Add(context.Background(), AddOptions{
-				Paths: []string{selection}, ExistingExclude: ExcludePreserve, MergeProtection: MergeEnable,
+				Paths: []string{selection}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip,
 			})
-			if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-				t.Fatalf("Add() error = %v, want unsupported_path for distinct Unicode entries", err)
+			if err != nil {
+				t.Fatalf("Add() rejected native-distinct Unicode entries: %v", err)
 			}
-			for _, path := range unchanged {
-				after, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !bytes.Equal(before[path], after) {
-					t.Errorf("rejected Add changed %s", path)
+			state := loadState(t, instance, publicRoot)
+			if len(state.PendingAdds) < 2 {
+				t.Fatalf("previous enrollment lost: %q", state.PendingAdds)
+			}
+			for _, path := range []string{raw, nfc} {
+				content, err := os.ReadFile(path)
+				if err != nil || len(content) == 0 {
+					t.Fatalf("native entry %q changed: %q, %v", path, content, err)
 				}
 			}
+
 		})
 	}
 }
@@ -175,17 +162,11 @@ func TestAddUnicodeSingleEntry(t *testing.T) {
 			err := instance.Add(context.Background(), AddOptions{
 				Paths: []string{selected}, ExistingExclude: ExcludePreserve, MergeProtection: MergeSkip,
 			})
-			if aliasErr != nil {
-				if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-					t.Fatalf("Add() = %v, want unsupported_path on a normalization-sensitive volume", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("Add() rejected a genuine Unicode alias: %v", err)
 			}
 			state := loadState(t, instance, publicRoot)
-			want := "caf\u00e9/r\u00e9sum\u00e9.txt"
+			want := "cafe\u0301/re\u0301sume\u0301.txt"
 			if len(state.PendingAdds) != 1 || state.PendingAdds[0] != want {
 				t.Fatalf("PendingAdds = %q, want canonical spelling", state.PendingAdds)
 			}
@@ -222,6 +203,11 @@ func TestAddUsesDirectoryEntrySpelling(t *testing.T) {
 			if err := os.WriteFile(stored, []byte("selected secret\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if test.name == "ASCII alias" {
+				if err := os.Link(stored, filepath.Join(filepath.Dir(stored), "copy.txt")); err != nil {
+					t.Logf("hard links unavailable: %v", err)
+				}
+			}
 			selected := filepath.Join(publicRoot, filepath.FromSlash(test.selected))
 			if _, err := os.Stat(selected); errors.Is(err, os.ErrNotExist) {
 				t.Skip("volume distinguishes the selected case spelling")
@@ -234,12 +220,19 @@ func TestAddUsesDirectoryEntrySpelling(t *testing.T) {
 				t.Fatal(err)
 			}
 			state := loadState(t, instance, publicRoot)
-			if len(state.PendingAdds) != 1 || state.PendingAdds[0] != test.stored {
-				t.Fatalf("PendingAdds = %q, want %q", state.PendingAdds, test.stored)
+			expectedSpelling := nativeEntrySpelling(t, publicRoot, test.stored)
+			if len(state.PendingAdds) != 1 || state.PendingAdds[0] != expectedSpelling {
+				t.Fatalf("PendingAdds = %q, want %q", state.PendingAdds, expectedSpelling)
 			}
 			result, err := instance.Git.Run(t.Context(), publicRoot, "ls-files", "--others", "--exclude-standard", "-z")
-			if err != nil || len(result.Stdout) != 0 {
-				t.Fatalf("ordinary Git visibility = %q, %v", result.Stdout, err)
+			wantVisible := ""
+			if test.name == "ASCII alias" {
+				if _, statErr := os.Stat(filepath.Join(filepath.Dir(stored), "copy.txt")); statErr == nil {
+					wantVisible = "assets/copy.txt\x00"
+				}
+			}
+			if err != nil || string(result.Stdout) != wantVisible {
+				t.Fatalf("ordinary Git visibility = %q, %v, want %q", result.Stdout, err, wantVisible)
 			}
 			data, err := os.ReadFile(stored)
 			if err != nil || string(data) != "selected secret\n" {
@@ -260,8 +253,8 @@ func TestAddUsesDirectoryEntrySpelling(t *testing.T) {
 				if err := instance.Diff(t.Context(), DiffOptions{Paths: []string{selected}, NameOnly: true}); err != nil {
 					t.Fatalf("Diff(alias, ignorecase=%s): %v", ignoreCase, err)
 				}
-				if diffOutput.String() != test.stored+"\n" {
-					t.Fatalf("Diff(alias, ignorecase=%s) = %q, want enrolled path %q", ignoreCase, diffOutput.String(), test.stored)
+				if diffOutput.String() != expectedSpelling+"\n" {
+					t.Fatalf("Diff(alias, ignorecase=%s) = %q, want enrolled path %q", ignoreCase, diffOutput.String(), expectedSpelling)
 				}
 			}
 			if err := instance.Remove(t.Context(), RemoveOptions{Paths: []string{selected}}); err != nil {

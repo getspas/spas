@@ -12,8 +12,10 @@ The following flags apply to all SPAS commands:
 | :--- | :--- | :--- |
 | `--repo PATH` | String | Path to the project Git workspace directory (defaults to `.`) |
 | `--git PATH` | String | Git executable; relative filesystem paths resolve from the invocation directory, and bare names use `PATH` |
-| `--non-interactive` | Flag | Disable interactive prompts; fails if any required decision flag is missing |
+| `--non-interactive` | Flag | Disable SPAS and supported Git authentication prompts; fail if a required decision is missing |
 | `--json` | Flag | Output structured JSON to stdout and disable interactive prompts |
+| `--progress MODE` | `auto` \| `never` | Select phase progress on stderr (default: `auto`) |
+| `--color MODE` | `auto` \| `always` \| `never` | Select terminal color (default: `auto`); machine output stays plain |
 | `-y, --yes` | Flag | Automatically accept non-destructive setup suggestions |
 | `-v, --verbose` | Flag | Output detailed diagnostic logs (excludes sensitive asset contents) |
 | `--timeout DURATION` | String | Maximum execution duration (e.g. `30s`, `5m`; default: no timeout) |
@@ -22,6 +24,40 @@ The following flags apply to all SPAS commands:
 
 > [!NOTE]
 > `-y` / `--yes` automatically accepts non-destructive setup suggestions. It does *not* authorize committing assets, deleting files, overriding tracked repository paths, discarding uncommitted workspace changes, or resolving merge conflicts.
+
+Human output uses restrained color for result labels, diagnostic statuses,
+warnings, errors, and Git diffs. Each destination is checked separately:
+redirecting stdout leaves its automatic output plain even when stderr is a
+terminal. Presentation is independent of terminal input and prompt availability.
+
+`--color=auto` uses supported output terminals. `--non-interactive`, a nonempty
+`CI` or `NO_COLOR`, and `TERM=dumb` disable automatic color. Unix terminals need
+a recognized ANSI color terminal type in `TERM`; empty or unknown types use
+plain text. Windows consoles need virtual-terminal processing already enabled;
+SPAS leaves console modes unchanged. `--color=always` overrides automatic policy
+and emits color in redirected human output. `--color=never` disables color.
+Invalid values return usage exit code 2. See the [NO_COLOR convention](https://no-color.org/).
+
+JSON, shell-completion scripts and requests, `status --short`, and
+`diff --name-only` remain plain for every color setting. Git diffs receive the
+stdout color policy explicitly because forwarded pipes do not establish native
+terminal attachment. Results stay on stdout; warnings and errors stay on stderr.
+Color supplements readable labels.
+
+`--progress=auto` animates real phases and available file counts on supported
+stderr terminals. Fast operations finish before animation appears. Progress
+is independent of color, `NO_COLOR`, and prompt availability. It is disabled
+for `--non-interactive`, CI, redirected stderr, unsupported/dumb terminals,
+JSON, completion, `status --short`, and `diff --name-only`.
+`--progress=never` disables motion while retaining warnings and errors;
+invalid values return usage exit code 2.
+
+Transient progress stays on stderr and fits within its terminal width.
+Animation clears before prompts, diagnostics, and results. Streaming Git and
+remote operations use a stable phase line while the child runs. Motion resumes
+after terminal ownership returns and clears on success, failure, timeout, or
+cancellation. SPAS leaves cursor visibility, input mode, and console modes
+unchanged.
 
 ---
 
@@ -33,7 +69,7 @@ Establish a local association between your project workspace and a linked GitHub
 spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 ```
 
-`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. By default it runs a networked visibility probe with Git credential helpers and prompts disabled, then prompts for confirmation if the repository is publicly readable. In non-interactive mode, a publicly readable repository fails with exit code `4` (`decision_required`) unless `--allow-public` is provided; `--allow-public` and `--dry-run` both skip the probe. Owner and repository names are case-insensitive and canonicalized to lowercase.
+`spas link` validates the workspace worktree structure and writes local link state without cloning, fetching, or editing workspace files. Except with `--dry-run`, it probes anonymous readability with Git credential helpers and prompts disabled. Detected public readability produces a warning on stderr and requires no approval, including in non-interactive mode. Sync checks again on each invocation that reaches its visibility check; dry-run and local merge abort do not probe. An unsuccessful probe does not prove private visibility; authenticated Git operations determine usability. Owner and repository names are case-insensitive and canonicalized to lowercase.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -41,7 +77,6 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving or network access |
-| `--allow-public` | Flag | `false` | Accept public-repository risk and skip the visibility probe (approval is recorded in link state; later syncs skip the probe) |
 
 ### Link Examples
 
@@ -66,10 +101,13 @@ Enroll local regular files under SPAS management.
 spas add PATH... [flags]
 ```
 
-`spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged.
+`spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged. Link state determines enrollment; editing exclusions does not change the managed asset set. Exclusion-writing commands rebuild missing or edited owned rules and report unexpected repairs on stderr (JSON code `exclusion_drift_repaired`). Ordinary requested enrollment/removal changes stay quiet. See [Safety and Limitations](Safety-and-limitations) for ownership markers, manual repair, and concurrency limits.
 
-Accepted filesystem aliases are enrolled using the actual directory-entry case
-and Unicode NFC spelling. This is the spelling used in state and exclusion rules.
+Enrollment uses the actual native directory-entry spelling. Distinct case or
+Unicode entries remain independent when both destinations support them. Imported
+asset-repository paths keep their exact Git spelling. Owned exclusions include
+native and precomposed aliases where necessary for project Git enumeration;
+those rules do not enroll additional assets.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -153,7 +191,6 @@ SPAS never creates commits in your project repository.
 | `--continue` | Flag | `false` | Continue a merge in the linked repository after resolving conflicts |
 | `--abort` | Flag | `false` | Abort an active merge and restore the pre-merge workspace state |
 | `--dry-run` | Flag | `false` | Read-only simulation without taking mutation locks or making network calls |
-| `--allow-public` | Flag | `false` | Allow syncing to a publicly readable repository without confirmation (approval is recorded in link state; later syncs skip the probe) |
 
 ### Verified Merge Protection
 
@@ -216,12 +253,12 @@ spas status --show-paths
 
 Compare managed assets in your local project workspace against the local managed checkout.
 
-File selection reads Git configuration and existing file metadata; it does not
-create a workspace probe file. Exact stored spellings take priority. Case aliases
-match when `core.ignoreCase` is true or existing file identities prove they refer
-to the same file. An unset `core.ignoreCase` defaults to false. Missing case aliases
-therefore require `core.ignoreCase=true`; exact missing paths remain selectable
-for pending removals and staged deletions.
+File selection reads existing directory entries without creating a workspace
+probe. Exact stored spellings take priority. An existing case or Unicode alias
+selects the enrolled path only when both spellings address the same native
+entry; distinct hard-link names remain distinct entries. Missing files require
+an exact stored spelling, including pending removals and staged deletions.
+`core.ignoreCase` does not establish native equivalence for diff selection.
 
 Accepted aliases select the authoritative enrolled filename in JSON, name-only,
 patch, and stat output, including `--staged`. The original selected spelling is
@@ -276,11 +313,37 @@ spas unlink [flags]
 | `--keep-files` | Flag | `true` | Retain managed files in the workspace (default) |
 | `--remove-files` | Flag | `false` | Delete managed assets from the project workspace |
 | `--approve-remove-files` | Flag | `false` | Explicit approval for `--remove-files` in non-interactive mode |
+| `--discard-unsynced-changes` | Flag | `false` | Separately approve discarding unsynchronized contents and executable changes; requires `--remove-files` |
 | `--keep-private-clone` | Flag | `true` | Retain the local managed checkout in application storage (default) |
 | `--remove-private-clone` | Flag | `false` | Delete the local managed checkout from storage |
-| `--force` | Flag | `false` | Bypass pending-recovery and asset safety checks when unlinking |
+| `--force` | Flag | `false` | Allow unlink despite pending synchronization or checkout recovery; does not approve workspace deletion or unsynchronized discard |
+
+Rules outside the exact owned block are preserved. If old ownership markers no longer match, those rules remain external and may survive unlink; review them manually if files stay ignored.
+
+Cleanup checks every owned target for project Git ownership and validates the
+exclusion-block structure before deleting files. A conflict or malformed block
+refuses the entire cleanup. General removal approval covers synchronized files;
+unsynchronized contents, executable changes, and never-synchronized additions
+require a separate prompt naming the affected paths or
+`--discard-unsynced-changes`. Neither `--yes` nor `--force` supplies that approval.
+Missing approval returns exit code 4 before deletion. Complete options run
+without prompting, including with `--json`.
+
+```bash
+# Remove synchronized workspace assets
+spas unlink --remove-files --approve-remove-files --non-interactive
+
+# Separately approve abandoning pending work and discarding unsynchronized files
+spas unlink --force --remove-files --approve-remove-files \
+  --discard-unsynced-changes --non-interactive
+```
+
+The managed checkout stays unless `--remove-private-clone` is supplied. Cleanup
+failure after link removal returns nonzero, states that unlink succeeded, and
+names the retained checkout paths.
 
 > [!WARNING]
+>
 > Unlinking with `--keep-files` removes the `.git/info/exclude` rules. Git will immediately see those files as untracked. Review `git status` before committing to avoid accidental secret leaks.
 
 ---
@@ -323,7 +386,7 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "ok": false,
   "error": {
     "code": "decision_required",
@@ -350,7 +413,36 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 | `11` | `unsupported_path` | Path is not a regular file (symlinks, junctions, control characters, or invalid encodings). |
 | `130` | `interrupted` | Execution cancelled by user interrupt (Ctrl+C / SIGINT). |
 
-The intended result for `--timeout` expiry is exit code `1` (`operation_failed`).
-A known limitation remains: deadlines wrapped by remote Git operations can
-currently return exit code `7` (`auth_or_network`). User signals return exit
-code `130` (`interrupted`).
+`--timeout` expiry returns exit code `1` (`operation_failed`), including during
+remote Git operations. User signals return exit code `130` (`interrupted`).
+
+### Unattended authentication
+
+Complete inputs run directly. `--non-interactive`, `--json`, or nonterminal
+input/output prevents SPAS prompts; a missing decision returns exit code 4 and
+names the required option. `--yes` covers recommended setup choices only.
+Credentials must be provisioned before unattended execution.
+
+SPAS disconnects inherited terminal input from unattended streaming Git while
+preserving explicit plumbing input. It disables Git terminal/askpass prompts,
+sets `SSH_ASKPASS_REQUIRE=never` and `GCM_INTERACTIVE=never`, and passes
+`credential.interactive=false` to Git commands. These controls also cover
+implicit fetches when reading a partial project clone. Stored HTTPS credentials
+remain available to configured helpers.
+
+Without custom SSH selection, SPAS uses OpenSSH with `BatchMode=yes`: keys or
+an agent and verified known-host entries must already work. Custom selection
+through `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_SSH_VARIANT`, `core.sshCommand`, or
+`ssh.variant` is preserved. Configure such commands for unattended use yourself
+(for example, `GIT_SSH_COMMAND='ssh -oBatchMode=yes -i /path/to/key'`). Other
+credential helpers, proxy commands, and custom interfaces must likewise be
+configured to avoid prompts; these controls cannot guarantee that arbitrary
+external programs remain prompt-free. SPAS never rewrites global Git or SSH
+configuration and preserves Git authentication diagnostics (exit code 7).
+
+`--timeout 5m` bounds command execution; there is no default deadline. Timeout
+or cancellation kills the unattended Git process group on macOS/Linux and uses
+the Windows system `taskkill /T /F` to stop the process tree. If Windows tree
+termination is unavailable, direct Git termination still applies. Detached
+helpers and pre-existing services are outside this boundary. Sync releases its
+link lock and retains pending recovery state so a subsequent sync can resume.

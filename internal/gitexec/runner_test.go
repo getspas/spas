@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/getspas/spas/internal/limits"
+	"github.com/getspas/spas/internal/lock"
 )
 
 func TestRunCapturesOutput(t *testing.T) {
@@ -25,6 +26,15 @@ func TestRunCapturesOutput(t *testing.T) {
 	}
 	if len(result.Stdout) == 0 {
 		t.Fatal("Run() returned empty stdout")
+	}
+}
+
+func TestRunReportsWorkingDirectoryOnStartFailure(t *testing.T) {
+	t.Parallel()
+	directory := filepath.Join(t.TempDir(), "missing")
+	_, err := (Runner{}).Run(t.Context(), directory, "--version")
+	if err == nil || !strings.Contains(err.Error(), strconv.Quote(directory)) || !strings.Contains(err.Error(), "start git") {
+		t.Fatalf("Run() = %v, want failed operation and working directory", err)
 	}
 }
 
@@ -313,6 +323,36 @@ func TestGitExecHelperProcess(t *testing.T) {
 		return
 	case "sleep":
 		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	case "locked-descendant-parent":
+		command := exec.Command(os.Args[0], "-test.run=^TestGitExecHelperProcess$")
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "SPAS_GITEXEC_HELPER=") {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(command.Env, "SPAS_GITEXEC_HELPER=locked-descendant")
+		command.Stdout, command.Stderr = os.Stdout, os.Stderr
+		if err := command.Start(); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "locked-descendant":
+		dir := os.Getenv("SPAS_GITEXEC_LOCK_DIR")
+		l, err := lock.Acquire(dir, "descendant")
+		if err != nil {
+			os.Exit(2)
+		}
+		defer l.Release()
+		ready := filepath.Join(dir, "ready")
+		if err := os.WriteFile(ready+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(3)
+		}
+		if err := os.Rename(ready+".tmp", ready); err != nil {
+			os.Exit(3)
+		}
+		time.Sleep(time.Minute)
 		os.Exit(0)
 	case "capture-overflow":
 		writeRepeated(os.Stdout, limits.MaxCapturedGitStdoutBytes+1)

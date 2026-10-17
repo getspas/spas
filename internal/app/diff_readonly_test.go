@@ -121,7 +121,15 @@ func TestDiffSelectionDoesNotWriteReadOnlyWorkspace(t *testing.T) {
 						if err := instance.Diff(t.Context(), options); err != nil {
 							t.Fatalf("Diff(%+v) error = %v; stderr=%q", options, err, stderr.String())
 						}
-						assertReadOnlyDiffOutput(t, output.String(), format.name, test.staged, test.stored, test.patch)
+						expected := test.stored
+						if selected != test.stored {
+							if _, err := os.Lstat(filepath.Join(publicRoot, filepath.FromSlash(selected))); os.IsNotExist(err) {
+								expected = ""
+							} else if err != nil {
+								t.Fatal(err)
+							}
+						}
+						assertReadOnlyDiffOutput(t, output.String(), format.name, test.staged, expected, test.patch)
 					})
 				}
 			}
@@ -131,6 +139,20 @@ func TestDiffSelectionDoesNotWriteReadOnlyWorkspace(t *testing.T) {
 
 func assertReadOnlyDiffOutput(t *testing.T, output, format string, staged bool, stored, patch string) {
 	t.Helper()
+	if stored == "" {
+		if format == "json" {
+			var result struct {
+				Changed []string `json:"changedPaths"`
+				Staged  []string `json:"stagedPaths"`
+			}
+			if err := json.Unmarshal([]byte(output), &result); err != nil || len(result.Changed)+len(result.Staged) != 0 {
+				t.Fatalf("missing nonexact selection = %s, %v", output, err)
+			}
+		} else if output != "" {
+			t.Fatalf("missing nonexact selection emitted %q", output)
+		}
+		return
+	}
 	slashOutput := strings.ReplaceAll(output, "\\", "/")
 	switch format {
 	case "json":

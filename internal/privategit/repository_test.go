@@ -757,7 +757,7 @@ func TestValidateTreeAllowsOrdinaryTextMentioningLFSVersion(t *testing.T) {
 	}
 }
 
-func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
+func TestValidateTreeChecksNativeCaseConflict(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -776,12 +776,22 @@ func TestValidateTreeRejectsPortableCaseConflict(t *testing.T) {
 		SafetyDir: filepath.Join(t.TempDir(), "safety"),
 	}
 	err := repository.ValidateTree(context.Background(), "HEAD")
-	if err == nil || !strings.Contains(err.Error(), "non-portable") {
-		t.Fatalf("ValidateTree() error = %v, want portability conflict", err)
+	probe, probeErr := os.OpenFile(filepath.Join(root, "Docs"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if probeErr != nil {
+		t.Fatal(probeErr)
+	}
+	probe.Close()
+	_, aliasErr := os.Stat(filepath.Join(root, "docs"))
+	if aliasErr == nil {
+		if err == nil || !strings.Contains(err.Error(), "aliases paths") {
+			t.Fatalf("ValidateTree() = %v, want native collision", err)
+		}
+	} else if err != nil {
+		t.Fatalf("ValidateTree() rejected native-distinct paths: %v", err)
 	}
 }
 
-func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
+func TestValidateTreeAllowsLongGitPaths(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -798,21 +808,8 @@ func TestValidateTreeRejectsPathLengthExceedingWindowsLimit(t *testing.T) {
 		Git:       gitexec.Runner{},
 		SafetyDir: filepath.Join(t.TempDir(), "safety"),
 	}
-	err := repository.ValidateTree(context.Background(), "HEAD")
-	if runtime.GOOS == "windows" {
-		if err == nil {
-			t.Fatal("ValidateTree() error = nil on Windows, want path length error")
-		}
-		if kind, ok := spaserr.KindOf(err); !ok || kind != spaserr.KindUnsupportedPath {
-			t.Fatalf("ValidateTree() error kind = %v, want KindUnsupportedPath", kind)
-		}
-		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") {
-			t.Fatalf("ValidateTree() error = %v, want Windows limit error", err)
-		}
-	} else {
-		if err != nil {
-			t.Fatalf("ValidateTree() error = %v on %s, want nil", err, runtime.GOOS)
-		}
+	if err := repository.ValidateTree(context.Background(), "HEAD"); err != nil {
+		t.Fatalf("ValidateTree() rejected long Git path: %v", err)
 	}
 }
 

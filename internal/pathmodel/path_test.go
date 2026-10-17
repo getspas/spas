@@ -26,28 +26,16 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestParseRejectsNonPortablePaths(t *testing.T) {
+func TestParseRejectsUnsafeOrUnrepresentablePaths(t *testing.T) {
 	t.Parallel()
 
 	for _, value := range []string{
 		"",
 		"../secret",
 		"/absolute",
-		"C:/absolute",
-		"C:relative",
 		"//server/share/private",
-		`\\server\share\private`,
 		".git/config",
 		"nested/.GiT/config",
-		"CON",
-		"folder/NUL.txt",
-		"folder/COM¹.log",
-		"CONIN$",
-		"file.",
-		"file ",
-		"stream:name",
-		`invalid*name`,
-		`literal\backslash`,
 		"line\nbreak",
 		"carriage\rreturn",
 		"control\u0001character",
@@ -60,15 +48,34 @@ func TestParseRejectsNonPortablePaths(t *testing.T) {
 	}
 }
 
-func TestCanonical(t *testing.T) {
+func TestParseUsesHostFilenameSyntax(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{
+		"CON", "folder/NUL.txt", "folder/COM¹.log", "CONIN$", "CONOUT$",
+		"file.", "file ", "stream:name", `invalid*name`, `question?name`,
+		`angle<>name`, `quote"name`, `pipe|name`, `literal\backslash`,
+		"C:/relative", "C:relative", `\\server\share\private`,
+	} {
+		got, err := Parse(value)
+		if runtime.GOOS == "windows" {
+			if err == nil {
+				t.Errorf("Parse(%q) accepted unsupported Windows syntax", value)
+			}
+		} else if err != nil || got.String() != value {
+			t.Errorf("Parse(%q) = %q, %v; want literal path", value, got, err)
+		}
+	}
+}
+
+func TestFolded(t *testing.T) {
 	t.Parallel()
 
 	path, err := Parse("docs/Architecture.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Canonical(path, true); got != "docs/architecture.md" {
-		t.Fatalf("Canonical() = %q", got)
+	if got := Folded(path); got != "docs/architecture.md" {
+		t.Fatalf("Folded() = %q", got)
 	}
 }
 
@@ -94,7 +101,7 @@ func TestResolveDoesNotFollowManagedPathSymlinks(t *testing.T) {
 	}
 }
 
-func TestCanonicalPreservesInvalidUTF8ObservedPaths(t *testing.T) {
+func TestFoldedPreservesInvalidUTF8ObservedPaths(t *testing.T) {
 	t.Parallel()
 
 	raw := string([]byte{'D', 'o', 'c', 's', '/', 0xff, 'A'})
@@ -102,34 +109,22 @@ func TestCanonicalPreservesInvalidUTF8ObservedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Canonical(path, false); got != raw {
-		t.Fatalf("Canonical(case-sensitive) changed raw bytes: %x", []byte(got))
+	if got := path.String(); got != raw {
+		t.Fatalf("Path.String() changed raw bytes: %x", []byte(got))
 	}
 	want := string([]byte{'d', 'o', 'c', 's', '/', 0xff, 'a'})
-	if got := Canonical(path, true); got != want {
-		t.Fatalf("Canonical(case-insensitive) = %x, want %x", []byte(got), []byte(want))
+	if got := Folded(path); got != want {
+		t.Fatalf("Folded() = %x, want %x", []byte(got), []byte(want))
 	}
 }
 
-func TestParseRejectsComponentLongerThanCrossPlatformByteLimit(t *testing.T) {
+func TestParsePreservesLongComponents(t *testing.T) {
 	t.Parallel()
-
-	_, err := Parse(strings.Repeat("é", 128)) // 256 UTF-8 bytes.
-	if err == nil {
-		t.Fatal("Parse() error = nil, want component byte-length error")
-	}
-}
-
-func TestParseAllowsComponentAtPortableASCIILimit(t *testing.T) {
-	t.Parallel()
-
-	value := strings.Repeat("a", 255)
-	path, err := Parse(value)
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	if path.String() != value {
-		t.Fatalf("Parse() = %q, want %q", path, value)
+	for _, value := range []string{strings.Repeat("é", 128), strings.Repeat("a", 512)} {
+		path, err := Parse(value)
+		if err != nil || path.String() != value {
+			t.Fatalf("Parse() = %q, %v; want exact identity", path, err)
+		}
 	}
 }
 
@@ -151,33 +146,5 @@ func TestResolveAllowsTotalPathLengthExceedingWindowsLimit(t *testing.T) {
 	expected := comp + "/" + comp + "/" + comp
 	if path.String() != expected {
 		t.Fatalf("Resolve() = %q, want %q", path, expected)
-	}
-}
-
-func TestValidatePathLength(t *testing.T) {
-	t.Parallel()
-
-	root := "/short/root"
-	if runtime.GOOS == "windows" {
-		root = `C:\short\root`
-	}
-	shortPath := Path("a/b/c.txt")
-	if err := ValidatePathLength(root, shortPath); err != nil {
-		t.Fatalf("ValidatePathLength(short) = %v, want nil", err)
-	}
-
-	longPath := Path(strings.Repeat("a/", 130) + "file.txt")
-	err := ValidatePathLength(root, longPath)
-	if runtime.GOOS == "windows" {
-		if err == nil {
-			t.Fatal("ValidatePathLength(long) error = nil on Windows, want limit error")
-		}
-		if !strings.Contains(err.Error(), "SPAS Windows preflight limit of 260 bytes") || !strings.Contains(err.Error(), "short") {
-			t.Fatalf("ValidatePathLength(long) error = %v, want Windows limit error naming root", err)
-		}
-	} else {
-		if err != nil {
-			t.Fatalf("ValidatePathLength(long) error = %v on %s, want nil", err, runtime.GOOS)
-		}
 	}
 }

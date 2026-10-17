@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,9 @@ import (
 	"github.com/getspas/spas/internal/gitexec"
 	"github.com/getspas/spas/internal/githubref"
 	"github.com/getspas/spas/internal/interaction"
+	"github.com/getspas/spas/internal/jsonoutput"
 	"github.com/getspas/spas/internal/linkstate"
+	"github.com/getspas/spas/internal/presentation"
 	"github.com/getspas/spas/internal/provider"
 	"github.com/getspas/spas/internal/spaserr"
 	"github.com/getspas/spas/internal/version"
@@ -31,6 +32,9 @@ type rootOptions struct {
 	nonInteractive bool
 	yes            bool
 	json           bool
+	color          presentation.ColorMode
+	progress       presentation.ProgressMode
+	presenter      presentation.Presenter
 	gitPath        string
 	verbose        bool
 	timeout        time.Duration
@@ -41,7 +45,7 @@ func Execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	root := NewRootContext(ctx, os.Stdin, os.Stdout, os.Stderr)
-	err := root.Execute()
+	command, err := root.ExecuteC()
 	options, _ := root.Context().Value(rootOptionsKey{}).(*rootOptions)
 	if options != nil && options.cancel != nil {
 		options.cancel()
@@ -62,18 +66,11 @@ func Execute() int {
 		}
 		if jsonMode {
 			if !reported {
-				payload := map[string]any{
-					"code":    errorCode(err),
-					"message": err.Error(),
-				}
-				_ = json.NewEncoder(root.ErrOrStderr()).Encode(map[string]any{
-					"schemaVersion": app.JSONSchemaVersion,
-					"ok":            false,
-					"error":         payload,
-				})
+				_ = jsonoutput.WriteError(root.ErrOrStderr(), errorCode(err), err.Error())
 			}
 		} else {
-			_, _ = fmt.Fprintln(root.ErrOrStderr(), "error:", err)
+			configurePresentation(command, options)
+			_, _ = fmt.Fprintln(root.ErrOrStderr(), options.presenter.Err("error:", presentation.Error), err)
 		}
 		return exitCode(err)
 	}
@@ -108,11 +105,38 @@ while keeping them at their normal paths in the project workspace.
 
 SPAS writes exact paths only to the project repository's local exclude file.
 It never edits .gitignore or global Git exclusions, and it never creates a
-commit in the project repository.`,
+commit in the project repository.
+
+Link state determines which assets are enrolled. Exclusion-writing commands
+rebuild missing or edited owned rules and warn when they repair unexpected
+changes. Edit outside the exact SPAS BEGIN/END markers; unrecognized marker
+text remains external and can survive unlink. Malformed or duplicate matching
+markers require manual repair: restore exactly one matching pair, or remove
+only the verified owned block and retry. Doctor diagnoses without repairs.
+
+Complete inputs run directly. --non-interactive, --json, and nonterminal runs
+disable SPAS prompts and Git terminal/askpass prompts. Provision credentials
+beforehand: default OpenSSH uses BatchMode and Git Credential Manager disables
+interaction. Custom SSH commands and credential helpers must be configured
+for unattended use; SPAS cannot control arbitrary helper interfaces. Use
+--timeout to bound execution; there is no default deadline. SPAS does not
+change global Git or SSH configuration.
+
+--color=auto styles human output on supported destination terminals. Automatic
+color is disabled by --non-interactive, CI, nonempty NO_COLOR, and unsupported
+terminals. --color=always overrides automatic policy; --color=never disables color.
+JSON, shell completion, status --short, and diff --name-only remain plain.
+Windows consoles require virtual-terminal processing already enabled.
+
+--progress=auto shows real phases on supported stderr terminals, independently
+of color and NO_COLOR. --progress=never disables motion. Non-interactive, CI,
+redirected, unsupported, and machine output has no progress. Prompts and Git
+output suspend motion; progress is cleared when the command finishes.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       version.Version,
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			configurePresentation(command, options)
 			if err := command.ValidateFlagGroups(); err != nil {
 				return spaserr.Wrap(spaserr.KindInvalidUsage, err)
 			}
@@ -127,7 +151,7 @@ commit in the project repository.`,
 				timeoutCtx, options.cancel = context.WithTimeout(command.Context(), options.timeout)
 				command.SetContext(timeoutCtx)
 			}
-			if !options.verbose || options.json {
+			if !options.verbose || machineOutput(command, options) {
 				return nil
 			}
 			repository := options.repo
@@ -140,7 +164,8 @@ commit in the project repository.`,
 			}
 			_, err := fmt.Fprintf(
 				command.ErrOrStderr(),
-				"spas: command=%s repo=%q git=%q\n",
+				"%s command=%s repo=%q git=%q\n",
+				options.presenter.Err("spas:", presentation.Result),
 				command.Name(),
 				repository,
 				gitPath,
@@ -157,9 +182,11 @@ commit in the project repository.`,
 	})
 
 	root.PersistentFlags().StringVar(&options.repo, "repo", "", "project Git workspace to operate on (default: current directory)")
-	root.PersistentFlags().BoolVar(&options.nonInteractive, "non-interactive", false, "never prompt; fail when a required choice is not supplied")
+	root.PersistentFlags().BoolVar(&options.nonInteractive, "non-interactive", false, "disable SPAS and supported Git authentication prompts; fail when a required choice is missing")
 	root.PersistentFlags().BoolVarP(&options.yes, "yes", "y", false, "accept recommended non-destructive setup confirmations")
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON and disable prompts")
+	root.PersistentFlags().Var(&options.color, "color", "color output: auto, always, or never (machine output stays plain)")
+	root.PersistentFlags().Var(&options.progress, "progress", "phase progress: auto or never (default: auto)")
 	root.PersistentFlags().StringVar(&options.gitPath, "git", "", "Git executable to use instead of searching PATH")
 	root.PersistentFlags().BoolVarP(&options.verbose, "verbose", "v", false, "show additional diagnostics without file contents")
 	root.PersistentFlags().DurationVar(&options.timeout, "timeout", 0, "maximum duration for command execution (default: no timeout)")
@@ -176,6 +203,17 @@ commit in the project repository.`,
 		newVersionCommand(options),
 	)
 	for _, command := range root.Commands() {
+		if run := command.RunE; run != nil {
+			command.RunE = func(cmd *cobra.Command, args []string) error {
+				defer func() {
+					options.presenter.Stop()
+					if options.cancel != nil {
+						options.cancel()
+					}
+				}()
+				return run(cmd, args)
+			}
+		}
 		if command.Args == nil {
 			continue
 		}
@@ -195,15 +233,15 @@ func newLinkCommand(root *rootOptions) *cobra.Command {
 	var branch string
 	var replace bool
 	var dryRun bool
-	var allowPublic bool
 	command := &cobra.Command{
 		Use:   "link [OWNER/REPOSITORY | GITHUB-URL]",
 		Short: "Link this project workspace to a GitHub repository",
 		Long: `Create a local association between this project workspace and a linked GitHub
 repository without cloning, fetching, copying files, updating local excludes,
-or changing Git configuration. Unless --allow-public or --dry-run is used,
-link runs a GitHub visibility probe with credential helpers and prompts disabled
-and asks before accepting a publicly readable repository.`,
+or changing Git configuration. Unless --dry-run is used, link runs a GitHub
+visibility probe with credential helpers and prompts disabled. Public readability
+produces a warning without requiring approval. An unsuccessful probe does not
+prove the repository is private.`,
 		Example: `  # Interactive
   spas link
 
@@ -246,12 +284,11 @@ and asks before accepting a publicly readable repository.`,
 				}
 			}
 			return instance.Link(command.Context(), app.LinkOptions{
-				Repository:  repository,
-				Transport:   selectedTransport,
-				Branch:      branch,
-				Replace:     replace,
-				DryRun:      dryRun,
-				AllowPublic: allowPublic,
+				Repository: repository,
+				Transport:  selectedTransport,
+				Branch:     branch,
+				Replace:    replace,
+				DryRun:     dryRun,
 			})
 		},
 	}
@@ -259,7 +296,6 @@ and asks before accepting a publicly readable repository.`,
 	command.Flags().StringVar(&branch, "branch", "", "branch in the linked repository; otherwise discover it during first sync")
 	command.Flags().BoolVar(&replace, "replace", false, "replace an existing local link without deleting its managed checkout")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the link without saving or network access")
-	command.Flags().BoolVar(&allowPublic, "allow-public", false, "accept public-repository risk and skip the visibility probe")
 	return command
 }
 
@@ -348,14 +384,16 @@ func newSyncCommand(root *rootOptions) *cobra.Command {
 	var continueMerge bool
 	var abortMerge bool
 	var dryRun bool
-	var allowPublic bool
 	command := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize managed assets with the linked repository",
 		Long: `Synchronize approved changes between the project workspace and the linked repository.
 sync clones or fetches when needed, creates at most one approved local-change
 commit in the linked repository, merges remote changes, pushes without force,
-and then writes the final assets. SPAS never creates a commit in the project repository.`,
+and then writes the final assets. SPAS never creates a commit in the project repository.
+Sync and merge continuation probe anonymous readability and warn without approval
+when public readability is detected. A failed probe does not prove private
+visibility. Dry-run and local merge abort do not make network calls.`,
 		Example: `  # Interactive
   spas sync
 
@@ -447,7 +485,6 @@ and then writes the final assets. SPAS never creates a commit in the project rep
 				Continue:             continueMerge,
 				Abort:                abortMerge,
 				DryRun:               dryRun,
-				AllowPublic:          allowPublic,
 			})
 		},
 	}
@@ -463,7 +500,6 @@ and then writes the final assets. SPAS never creates a commit in the project rep
 	command.Flags().BoolVar(&continueMerge, "continue", false, "continue a merge in the linked repository after resolving files")
 	command.Flags().BoolVar(&abortMerge, "abort", false, "abort a merge in the linked repository and restore its local pre-merge state")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "analyze local state without cloning, fetching, committing, pushing, or persistent changes")
-	command.Flags().BoolVar(&allowPublic, "allow-public", false, "allow syncing to a publicly readable repository")
 	return command
 }
 
@@ -554,6 +590,7 @@ func newUnlinkCommand(root *rootOptions) *cobra.Command {
 	var keepFiles bool
 	var removeFiles bool
 	var approveRemoveFiles bool
+	var discardUnsyncedChanges bool
 	var keepClone bool
 	var removeClone bool
 	var force bool
@@ -562,13 +599,20 @@ func newUnlinkCommand(root *rootOptions) *cobra.Command {
 		Short: "Remove this workspace's local SPAS association",
 		Long: `Remove SPAS link state, its marked local-exclude block, and merge settings
 that still exactly match values SPAS wrote. Workspace files and the managed
-checkout are kept unless removal is explicitly requested.`,
+checkout are kept unless removal is explicitly requested. File cleanup refuses
+project-tracked targets and malformed exclusion ownership before deletion.
+Unsynchronized workspace contents and executable changes require separate
+discard approval; --yes and --force do not supply it.`,
 		Example: `  spas unlink
-  spas unlink --remove-files --approve-remove-files --remove-private-clone --non-interactive`,
+  spas unlink --remove-files --approve-remove-files --remove-private-clone --non-interactive
+  spas unlink --force --remove-files --approve-remove-files --discard-unsynced-changes --non-interactive`,
 		Args: cobra.NoArgs,
 		PreRunE: func(command *cobra.Command, args []string) error {
 			if approveRemoveFiles && !removeFiles {
 				return usageError("--approve-remove-files requires --remove-files")
+			}
+			if discardUnsyncedChanges && !removeFiles {
+				return usageError("--discard-unsynced-changes requires --remove-files")
 			}
 			if command.Flags().Changed("keep-files") {
 				if !keepFiles {
@@ -594,16 +638,18 @@ checkout are kept unless removal is explicitly requested.`,
 				return err
 			}
 			return instance.Unlink(command.Context(), app.UnlinkOptions{
-				Force:              force,
-				RemoveFiles:        removeFiles,
-				ApproveRemoveFiles: approveRemoveFiles,
-				RemovePrivateClone: removeClone,
+				Force:                  force,
+				RemoveFiles:            removeFiles,
+				ApproveRemoveFiles:     approveRemoveFiles,
+				DiscardUnsyncedChanges: discardUnsyncedChanges,
+				RemovePrivateClone:     removeClone,
 			})
 		},
 	}
 	command.Flags().BoolVar(&keepFiles, "keep-files", true, "keep SPAS-managed workspace files; this is the default")
 	command.Flags().BoolVar(&removeFiles, "remove-files", false, "remove SPAS-managed workspace files after confirmation")
 	command.Flags().BoolVar(&approveRemoveFiles, "approve-remove-files", false, "explicitly approve --remove-files in a non-interactive command")
+	command.Flags().BoolVar(&discardUnsyncedChanges, "discard-unsynced-changes", false, "separately approve discarding unsynchronized workspace contents and executable changes; requires --remove-files")
 	command.Flags().BoolVar(&keepClone, "keep-private-clone", true, "keep the managed checkout; this is the default")
 	command.Flags().BoolVar(&removeClone, "remove-private-clone", false, "remove the managed checkout")
 	command.Flags().BoolVar(&force, "force", false, "unlink despite pending state in the linked repository")
@@ -642,16 +688,13 @@ func newVersionCommand(root *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			if root.json {
-				encoder := json.NewEncoder(command.OutOrStdout())
-				encoder.SetEscapeHTML(false)
-				return encoder.Encode(map[string]any{
-					"schemaVersion": app.JSONSchemaVersion,
-					"version":       version.Version,
-					"commit":        version.Commit,
-					"date":          version.Date,
+				return jsonoutput.Write(command.OutOrStdout(), map[string]any{
+					"version": version.Version,
+					"commit":  version.Commit,
+					"date":    version.Date,
 				})
 			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "spas %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
+			_, err := fmt.Fprintf(command.OutOrStdout(), "%s %s (commit %s, built %s)\n", root.presenter.Out("spas", presentation.Result), version.Version, version.Commit, version.Date)
 			return err
 		},
 	}
@@ -679,6 +722,9 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	nonInteractive := options.nonInteractive || options.json
 	prompt := interaction.Detect(command.InOrStdin(), command.ErrOrStderr(), nonInteractive)
 	prompt.AssumeYes = options.yes
+	options.presenter.StartProgress(command.Context(), options.progress, options.nonInteractive, machineOutput(command, options), command.ErrOrStderr())
+	prompt.Out = options.presenter.Writer(prompt.Out)
+	prompt.Before = func() func() { return options.presenter.Pause(false) }
 	gitPath := options.gitPath
 	if strings.ContainsRune(gitPath, '/') || strings.ContainsRune(gitPath, filepath.Separator) || filepath.VolumeName(gitPath) != "" {
 		gitPath, err = filepath.Abs(gitPath)
@@ -689,26 +735,49 @@ func buildApp(command *cobra.Command, options *rootOptions) (app.App, error) {
 	git := gitexec.Runner{
 		Path: gitPath,
 		// Git terminal prompts are disabled whenever SPAS itself cannot
-		// prompt, including non-TTY runs, so authentication fails
-		// deterministically instead of hanging while the link lock is held.
+		// prompt, including non-TTY runs. Custom helpers still need their
+		// own unattended configuration; a timeout bounds command execution.
 		NonInteractive: !prompt.Interactive,
 		Stdin:          command.InOrStdin(),
+		BeforeTerminal: func() func() { return options.presenter.Pause(true) },
 	}
 	if !options.json {
-		git.Stdout = command.OutOrStdout()
-		git.Stderr = command.ErrOrStderr()
+		git.Stdout = options.presenter.Writer(command.OutOrStdout())
+		git.Stderr = options.presenter.Writer(command.ErrOrStderr())
 	}
 	return app.App{
-		Git:      git,
-		Store:    linkstate.Store{ConfigDir: dirs.Config, DataDir: dirs.Data},
-		Prompt:   prompt,
-		Out:      command.OutOrStdout(),
-		Err:      command.ErrOrStderr(),
-		RepoHint: repoHint,
-		PathBase: pathBase,
-		JSON:     options.json,
-		Provider: githubref.Provider{},
+		Presenter: options.presenter,
+		Git:       git,
+		Store:     linkstate.Store{ConfigDir: dirs.Config, DataDir: dirs.Data},
+		Prompt:    prompt,
+		Out:       options.presenter.Writer(command.OutOrStdout()),
+		Err:       options.presenter.Writer(command.ErrOrStderr()),
+		RepoHint:  repoHint,
+		PathBase:  pathBase,
+		JSON:      options.json,
+		Provider:  githubref.Provider{},
 	}, nil
+}
+
+func configurePresentation(command *cobra.Command, options *rootOptions) {
+	options.presenter = presentation.New(options.color, options.nonInteractive, machineOutput(command, options), command.OutOrStdout(), command.ErrOrStderr())
+}
+
+func machineOutput(command *cobra.Command, options *rootOptions) bool {
+	if options.json {
+		return true
+	}
+	switch command.Name() {
+	case "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+		return true
+	case "status":
+		short, _ := command.Flags().GetBool("short")
+		return short
+	case "diff":
+		nameOnly, _ := command.Flags().GetBool("name-only")
+		return nameOnly
+	}
+	return false
 }
 
 func classifyExecutionError(err error) error {
@@ -725,6 +794,9 @@ func classifyExecutionError(err error) error {
 }
 
 func errorKind(err error) spaserr.Kind {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return spaserr.KindOperation
+	}
 	if kind, ok := spaserr.KindOf(err); ok {
 		return kind
 	}

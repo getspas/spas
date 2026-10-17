@@ -36,9 +36,11 @@ func validActiveMerge(conflictPaths, recoveryPaths, overridePaths []string) Acti
 	}
 	materializationPaths := append([]string{}, paths...)
 	materializationSnapshots := append([]WorkspaceSnapshot{}, snapshots...)
+	replacements := make(map[string]string, len(overridePaths))
 	statuses := make([]OverrideStatus, 0, len(overridePaths))
 	for _, path := range overridePaths {
 		statuses = append(statuses, OverrideStatus{Path: path})
+		replacements[path] = path
 	}
 	return ActiveMerge{
 		ConflictFilesReady:       true,
@@ -51,6 +53,7 @@ func validActiveMerge(conflictPaths, recoveryPaths, overridePaths []string) Acti
 		ConflictPaths:            conflictPaths,
 		RecoveryPaths:            recoveryPaths,
 		OverridePaths:            overridePaths,
+		OverrideReplacements:     replacements,
 	}
 }
 
@@ -168,35 +171,6 @@ func TestStoreRejectsPrivatePathCountAboveLimit(t *testing.T) {
 			t.Fatalf("Save() error = %v, want materialization private-tree limit", err)
 		}
 	})
-}
-
-func TestSaveLoadPublicApproved(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store := Store{
-		ConfigDir: filepath.Join(root, "config"),
-		DataDir:   filepath.Join(root, "data"),
-	}
-	state := New(
-		filepath.Join(root, "public"),
-		filepath.Join(root, "public", ".git"),
-		testRepositoryRef(),
-		"main",
-		store,
-	)
-	state.Private.PublicApproved = true
-
-	if err := store.Save(state); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	got, err := store.Load(state.Public.Root, state.Public.GitCommonDir)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !got.Private.PublicApproved {
-		t.Fatalf("Load().Private.PublicApproved = false, want true")
-	}
 }
 
 func TestSaveLoadAcceptsAbortOnlyMergeRecovery(t *testing.T) {
@@ -374,6 +348,27 @@ func TestLoadRejectsTamperedSchemaPrivatePathsAndUnknownFields(t *testing.T) {
 				document["schemaVersion"] = float64(1)
 			},
 			wantInError: "unsupported link-state schema",
+		},
+		{
+			name: "obsolete schema 2",
+			mutate: func(document map[string]any, _ State) {
+				document["schemaVersion"] = float64(2)
+			},
+			wantInError: "unsupported link-state schema",
+		},
+		{
+			name: "obsolete schema 3",
+			mutate: func(document map[string]any, _ State) {
+				document["schemaVersion"] = float64(3)
+			},
+			wantInError: "unsupported link-state schema",
+		},
+		{
+			name: "obsolete public approval",
+			mutate: func(document map[string]any, _ State) {
+				document["private"].(map[string]any)["publicApproved"] = true
+			},
+			wantInError: `unknown field "publicApproved"`,
 		},
 		{
 			name: "future schema",
@@ -906,13 +901,14 @@ func TestSaveLoadPreservesMaterializationWorkspaceContract(t *testing.T) {
 		store,
 	)
 	state.Materializing = &Materialization{
-		Phase:             MaterializationPushed,
-		ResultPrivateHead: strings.Repeat("a", 40),
-		PreviousPaths:     []string{".env"},
-		FinalPaths:        []string{".env"},
-		ExcludedPaths:     []string{".env"},
-		OverridePaths:     []string{".env"},
-		RecoveryPaths:     []string{".env"},
+		Phase:                MaterializationPushed,
+		ResultPrivateHead:    strings.Repeat("a", 40),
+		PreviousPaths:        []string{".env"},
+		FinalPaths:           []string{".env"},
+		ExcludedPaths:        []string{".env"},
+		OverridePaths:        []string{".env"},
+		OverrideReplacements: map[string]string{".env": ".env"},
+		RecoveryPaths:        []string{".env"},
 		WorkspaceSnapshots: []WorkspaceSnapshot{{
 			Path:       ".env",
 			Digest:     strings.Repeat("b", 64),
@@ -992,13 +988,14 @@ func TestSaveRejectsInvalidMaterializationWorkspaceContract(t *testing.T) {
 				store,
 			)
 			state.Materializing = &Materialization{
-				Phase:             MaterializationPushed,
-				ResultPrivateHead: strings.Repeat("a", 40),
-				PreviousPaths:     []string{".env"},
-				FinalPaths:        []string{".env"},
-				ExcludedPaths:     []string{".env"},
-				OverridePaths:     []string{".env"},
-				RecoveryPaths:     []string{".env"},
+				Phase:                MaterializationPushed,
+				ResultPrivateHead:    strings.Repeat("a", 40),
+				PreviousPaths:        []string{".env"},
+				FinalPaths:           []string{".env"},
+				ExcludedPaths:        []string{".env"},
+				OverridePaths:        []string{".env"},
+				OverrideReplacements: map[string]string{".env": ".env"},
+				RecoveryPaths:        []string{".env"},
 				WorkspaceSnapshots: []WorkspaceSnapshot{{
 					Path:    ".env",
 					Digest:  strings.Repeat("b", 64),

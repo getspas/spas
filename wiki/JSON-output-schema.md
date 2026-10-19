@@ -1,6 +1,11 @@
 # JSON Output Schema Reference
 
-SPAS provides structured JSON output for all commands invoked with `--json`. You can use this output in continuous integration (CI), automation pipelines, and custom developer tools.
+Use `--json` to read SPAS operation results in scripts. Results go to stdout;
+warnings and errors go to stderr as newline-delimited JSON. Help, shell
+completion, and the root `--version` flag retain their text or script formats;
+use `spas version --json` for build metadata as JSON.
+
+[Command payloads](#3-command-payload-schemas) · [Warnings](#warning-records-schema-3) · [Errors](#2-standard-error-envelope) · [Schema contracts](Schemas)
 
 ---
 
@@ -158,7 +163,7 @@ Conventions used below:
 
 - `added` — paths newly enrolled by this command.
 - `canceledRemovals` — pending removals cancelled because the path was re-added.
-- `skippedTrackedPaths` — paths skipped because public Git tracks them.
+- `skippedTrackedPaths` — paths skipped because the project repository tracks them.
 - `pendingSync` — `true` while enrolled additions await `spas sync`.
 
 #### Add Dry-Run Payload (`--dry-run`)
@@ -203,7 +208,7 @@ Conventions used below:
 Conditional keys:
 
 - `refreshedRemovals` (array, **conditional**) — already-pending removals whose recorded state this command refreshed; present only when non-empty.
-- `unenrolled` (array, **conditional**) — never-synced pending additions that were unenrolled immediately; present only when non-empty. Each such path is also reported on stderr as no longer excluded from public Git.
+- `unenrolled` (array, **conditional**) — never-synced pending additions that were unenrolled immediately; present only when non-empty. These files remain in the workspace and lose their SPAS exclusions. In human-readable mode, SPAS also warns about each path on stderr; JSON consumers should use this field.
 
 #### Remove Dry-Run Payload (`--dry-run`)
 
@@ -292,7 +297,7 @@ A full abort with workspace restoration. `recoveryCopies` (string, **conditional
 
 #### Sync Dry-Run Payload (Uninitialized Clone)
 
-Emitted when the private clone has not been initialized yet:
+Emitted when the managed checkout has not been initialized yet:
 
 ```json
 {
@@ -418,7 +423,7 @@ Emitted when the private clone has not been initialized yet:
 
 - `stagedPaths` is an empty array (`[]`) when nothing is staged.
 
-See the [Diff command reference](Command-reference.md#spas-diff) for file-selection,
+See the [Diff command reference](Command-reference#spas-diff) for file-selection,
 alias, and staged-rename behavior shared by JSON and text output.
 
 ---

@@ -1,290 +1,157 @@
 <div align="center">
 
-<img src="wiki/banner.png" alt="SPAS — Secure Private Asset Sync">
+<img src="wiki/banner.png" alt="SPAS: Private files. Normal paths. Separate history. Selected workspace files sync to a separate Git repository." width="1000">
 
 # SPAS: Secure Private Asset Sync
 
-**Manage private assets in your project workspace without committing them to your main Git repository.**
+**Private files. Normal paths. Separate history.**
 
-SPAS (pronounced **"/spæz/"**) connects your local workspace to a separate GitHub repository, keeping private files, environment configs, and test fixtures where your tools expect them.
-
-[![CI](https://github.com/getspas/spas/actions/workflows/ci.yml/badge.svg)](https://github.com/getspas/spas/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/getspas/spas?display_name=tag&sort=semver)](https://github.com/getspas/spas/releases/latest)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4c566a)
-![Architectures](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4c566a)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![CI](https://github.com/getspas/spas/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/getspas/spas/actions/workflows/ci.yml)
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Commands](#commands) · [Documentation](https://github.com/getspas/spas/wiki) · [Discussions](https://github.com/getspas/spas/discussions)
+[**Install SPAS**](#installation) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Wiki](https://github.com/getspas/spas/wiki) · [Discussions](https://github.com/getspas/spas/discussions)
 
 </div>
 
----
-
-Every project relies on files that don't belong in the public or shared Git repository: local `.env` files, developer overrides, test fixtures, API mocks, and internal team notes.
-
-Moving these files elsewhere breaks build paths. Copying them manually across machines is slow and error-prone. Committing them exposes them to every collaborator and bloats history.
-
-SPAS keeps those files in your workspace and versions them separately:
-
-- **Zero Path Rewiring:** Your files remain in their expected workspace locations. Build scripts, tests, and IDEs work without modification.
-- **Clean Main History:** Files are automatically ignored in the main project via `.git/info/exclude`, leaving your `.gitignore` untouched.
-- **Dedicated Version Control:** Managed assets are versioned, committed, and synced to a dedicated, separate GitHub repository.
-- **Built-in Safety:** Advisory file locking, atomic writes, dry-run previews, and fail-safe recovery protect your workspace from data loss.
-
----
+SPAS (pronounced **"/spæz/"**) keeps the files you don't commit at their normal
+project paths and syncs them across your machines through a separate GitHub
+repository. Your local setup gets its own Git history, and your tools keep
+finding files where they expect them.
 
 ## Why SPAS?
 
-| Challenge | Without SPAS | With SPAS |
-| :--- | :--- | :--- |
-| **Asset Location** | Stored outside project or requires symlinks | Kept directly at standard project paths |
-| **Main Git Cleanliness** | Cluttered `.gitignore` or accidental commits | Untracked in main repo via local `.git/info/exclude` |
-| **Team & Device Sync** | Manual copy-pasting or ad-hoc scripts | One-command synchronization across machines |
-| **Version History** | No audit trail for private changes | Full Git history in dedicated asset repository |
-| **Automation & CI** | Brittle manual workflows | Script-friendly JSON output, dry-runs, and exit codes |
+Your project has more than source code. Maybe it's a local config, a set of API
+mocks, or notes you'd like to pick up on your other laptop. Choose those files
+once, then run `spas sync` when you're ready to exchange changes.
 
----
+| Keep your workflow | What SPAS handles |
+| :--- | :--- |
+| Use the same file paths | Files stay in your workspace, where your editor, scripts, and tests expect them |
+| Keep personal files out of project history | Local rules in `.git/info/exclude` keep selected files untracked; `.gitignore` stays unchanged |
+| Keep a history of your local setup | A separate GitHub repository records commits and merges |
+| Choose what travels with you | Enroll individual files or the current files in a directory; sync when you ask |
 
-## How It Works
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        Project Workspace                        │
-│                                                                 │
-│   ┌────────────────────────┐      ┌─────────────────────────┐   │
-│   │     Tracked Files      │      │     Managed Assets      │   │
-│   │    (Main Git Repo)     │      │     (SPAS Managed)      │   │
-│   └───────────▲────────────┘      └────────────▲────────────┘   │
-│               │                                │                │
-│               │     Excluded from Main Repo    │                │
-│               │   ◄─────────────────────────   │                │
-│               │      (.git/info/exclude)       │                │
-└───────────────┼────────────────────────────────┼────────────────┘
-                │                                │
-         Normal Git Ops                      SPAS Sync
-      (git push / git pull)            (spas sync / checkout)
-                │                                │
-                ▼                                ▼
-        Main Git Remote              Linked GitHub Repository
-     (Public or Shared Repo)        (Dedicated Asset Storage)
-```
-
-SPAS coordinates three distinct layers:
-
-1. **Workspace Layer:** Assets live directly at their standard project paths. SPAS manages an owned block in `.git/info/exclude` so the main repository leaves them untracked.
-2. **Coordination & Safety Layer:** SPAS acquires an OS-level advisory lock and stages updates via atomic same-filesystem renames (`/.spas-tmp/`).
-3. **Dedicated Asset Storage:** Assets are committed, merged, and pushed to a separate GitHub repository with independent history.
-
----
-
-### Filename Support
-
-SPAS accepts filename punctuation, device-name spellings, and trailing dots or
-spaces when supported by the host's Git and filesystem operations. For example,
-`notes:2026.md`, `CON`, and `draft*.txt` can be managed on Unix filesystems that
-represent them. Exclusions and Git operations treat these names literally.
-Windows rejects its reserved names and characters, alternate data streams, and
-trailing dots or spaces. An asset set accepted on one machine may fail on another;
-SPAS reports the failing path rather than renaming it.
-
-Paths must remain inside the workspace and be representable in SPAS state and
-exclusion rules: valid UTF-8 without control or Unicode format characters. Git
-metadata, SPAS's temporary directory, symlinks, submodules, LFS pointers, and Git
-control files remain unsupported. Exact Git path identities are preserved.
-Distinct case and Unicode spellings can coexist when both the workspace and
-managed checkout can represent them. SPAS checks native destination aliases,
-including file/directory conflicts, before applying assets; Git's
-`core.ignoreCase` setting does not decide filesystem equivalence.
-
-Path lengths follow the actual Git and filesystem operations on each machine.
-SPAS imposes no fixed component-byte or absolute-path ceiling. Support depends
-on both the workspace and managed checkout destinations, including their roots
-and Git configuration; a name that works on one machine may fail on another.
-Failures identify the operation and path; interrupted synchronization retains
-its recovery state. Tree-entry and metadata-size bounds still apply separately.
-[Schema contracts](wiki/Schemas.md)
-document the independent persisted-state and CLI JSON versions. State records
-exact ownership replacements for recovery and accepts only its current version,
-without migration.
+Use it for **local configs, test fixtures, personal notes, editor settings, helper
+scripts, or your own AI instructions**. These are examples; SPAS manages supported
+regular files containing text or binary data.
 
 ## Installation
 
-Download the pre-compiled binary for your system from the [latest GitHub release](https://github.com/getspas/spas/releases/latest), rename it to `spas` (or `spas.exe` on Windows), and place it in your system `PATH`. On macOS and Linux, make it executable with `chmod +x spas`.
+SPAS runs on **Windows, macOS, and Linux**, on **amd64 and arm64**.
+You'll need **Git 2.43.1 or newer**.
 
-SPAS requires **Git 2.43.1 or newer** at runtime.
+### macOS: Homebrew
 
-For complete verification and shell completion setup, see the [Installation Guide](https://github.com/getspas/spas/wiki/Installation).
-
-### Package Managers
-
-Use Homebrew on macOS or Linux, WinGet or Scoop on Windows, or download a
-DEB or RPM package for Linux. The Homebrew formula builds SPAS from source.
-
-| Platform | Channel | Installation |
-| --- | --- | --- |
-| macOS / Linux | Homebrew source formula | `brew install getspas/tap/spas` |
-| Windows | WinGet | `winget install --exact --id GetSPAS.SPAS --source winget --scope user` |
-| Windows | Scoop | Add the [getspas bucket](https://github.com/getspas/scoop-bucket), then `scoop install getspas/spas` |
-| Debian / Ubuntu | DEB download | Download the release DEB and run `sudo apt install ./spas_<VERSION>_amd64.deb` |
-| Fedora / compatible RPM systems | RPM download | Verify the release RPM and install it with DNF |
-
-See the [package-manager installation instructions](wiki/Installation.md#4-package-managers).
-Download Linux packages from [GitHub Releases](https://github.com/getspas/spas/releases)
-and install them locally with APT or DNF.
-
-### Build from Source
-
-```bash
-go install -trimpath github.com/getspas/spas@latest
+```sh
+brew install getspas/tap/spas
 ```
 
----
+The [SPAS tap](https://github.com/getspas/homebrew-tap) builds from source and
+installs its build dependencies.
+
+### Linux: standalone binary
+
+[Download the Linux binary](https://github.com/getspas/spas/releases/latest) for
+`amd64` (x86_64) or `arm64` (AArch64),
+[verify it](https://github.com/getspas/spas/wiki/Installation#2-verify-release-authenticity-and-integrity),
+and rename it to `spas`. From the download directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 ./spas "$HOME/.local/bin/spas"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+To keep this `PATH` setting for future sessions, add the `export` line to your
+shell configuration.
+
+Prefer package management? Use a [DEB or RPM](https://github.com/getspas/spas/wiki/Installation#downloadable-linux-packages)
+for a compatible distribution, or the [Homebrew tap](https://github.com/getspas/spas/wiki/Installation#homebrew-macos-and-linux)
+if you already use Homebrew on Linux.
+
+### Windows: Scoop
+
+```powershell
+scoop bucket add getspas https://github.com/getspas/scoop-bucket
+scoop install getspas/spas
+```
+
+### More installation options
+
+| Prefer… | Install with… |
+| :--- | :--- |
+| A Linux package | [Download a DEB or RPM](https://github.com/getspas/spas/releases/latest), then follow the [APT/DNF instructions](https://github.com/getspas/spas/wiki/Installation#downloadable-linux-packages) |
+| A standalone binary | [Download for your OS and architecture](https://github.com/getspas/spas/releases/latest) and [verify the download](https://github.com/getspas/spas/wiki/Installation#2-verify-release-authenticity-and-integrity) |
+| Go tooling | `go install -trimpath github.com/getspas/spas@latest` ([source requirements](https://github.com/getspas/spas/wiki/Installation#3-build-from-source)) |
+
+Check your installation with `spas version`. The [installation guide](https://github.com/getspas/spas/wiki/Installation)
+also covers upgrades, shell completion, and package availability.
 
 ## Quick Start
 
-### 1. Create an Asset Repository
-
-Create an empty repository on GitHub (e.g., `your-org/project-assets`).
-
-### 2. Link and Add Files
-
-Open a terminal in your project workspace and run:
+Create an empty GitHub repository for your files, then open your project workspace.
+Replace the repository and paths below with your own; the files should already
+exist and be untracked by your project repository.
 
 ```bash
-# Link your workspace to the asset repository
+# Link this project to your asset repository
 spas link your-org/project-assets --transport ssh --branch main
 
-# Add the private assets you want SPAS to manage
-spas add config/dev.json testdata/mock-api.json docs/team-notes.md
+# Choose the files you want to bring along
+spas add config/dev.json testdata/mock-api.json
 
-# Synchronize assets to the linked repository
+# Commit, merge, and sync them with GitHub
 spas sync
 ```
 
-### 3. Workflow Summary
+SPAS asks for missing setup decisions and commit approval. Prefer HTTPS?
+Use `--transport https` when linking.
 
-1. **`spas link`** — Connects your project workspace to the dedicated asset repository and warns when that repository is publicly readable.
-2. **`spas add`** — Tracks chosen files and creates local exclusion rules in `.git/info/exclude` (offline).
-3. **`spas sync`** — Validates, commits, merges, and synchronizes assets with GitHub.
+> [!TIP]
+> Run `spas sync --dry-run` to preview local sync state and `spas diff --stat`
+> to review local changes. Both use the state available on your machine.
 
-### Preview Before Syncing
+On your other machine, link the project to the same asset repository and branch,
+then run `spas sync`. Files already in the asset repository arrive at the same
+project-relative paths.
 
-Preview the sync and inspect differences before modifying files or committing:
+[Follow the full walkthrough](https://github.com/getspas/spas/wiki/Quick-start)
+for Git authentication, first-sync details, and setup on a second machine.
 
-```bash
-spas sync --dry-run
-spas diff --stat
+## How It Works
+
+Two Git histories share one workspace:
+
+```mermaid
+flowchart TB
+    subgraph workspace["Your project workspace"]
+        source["Source code"]
+        files["Your selected files"]
+    end
+    source <-->|git push / pull| project["Project Git remote"]
+    files <-->|spas sync| assets["Asset repository on GitHub"]
+    assets <-->|spas sync| other["Same files on your other machine"]
 ```
 
----
+SPAS maintains local exclusions for the selected files and prepares commits and
+merges in its managed checkout, using the asset branch you linked.
 
-## Commands
+You choose when to sync. Each machine uses the same asset set, so leave files
+that need different contents on each machine unenrolled.
 
-| Command | Description |
-| :--- | :--- |
-| `spas link` | Connect the project workspace to a GitHub repository |
-| `spas add PATH...` | Track regular files under SPAS management |
-| `spas remove PATH...` | Untrack selected assets on the next sync |
-| `spas sync` | Synchronize assets between workspace and linked repository |
-| `spas status` | Check link status, managed assets, collisions, and recovery state |
-| `spas diff` | Compare workspace assets against the local managed checkout |
-| `spas doctor` | Diagnose Git configuration, path exclusions, and recovery health |
-| `spas unlink` | Remove the SPAS association while preserving workspace files |
-| `spas completion` | Generate auto-completion scripts for Bash, Zsh, Fish, or PowerShell |
-| `spas version` | Display version, commit hash, and build metadata |
-
-### Unlink and Optional Cleanup
-
-`spas unlink` keeps workspace files and the managed checkout, removes SPAS's
-local exclusions, and reports files now eligible for project Git staging.
-To remove synchronized workspace files during unlink:
-
-```bash
-spas unlink --remove-files --approve-remove-files --non-interactive
-```
-
-Unsynchronized contents, executable changes, and never-synchronized additions
-need separate discard approval. Interactive cleanup names the affected files
-and asks for that approval. For unattended cleanup, inspect the files first and
-explicitly add `--discard-unsynced-changes`:
-
-```bash
-spas unlink --force --remove-files --approve-remove-files \
-  --discard-unsynced-changes --non-interactive
-```
-
-`--discard-unsynced-changes` requires `--remove-files`. `--yes`, `--force`, and
-general file-removal approval do not authorize unsynchronized discard. Missing
-approvals return exit code 4 before deleting files. `--force` permits abandoning
-pending synchronization; it does not bypass cleanup safety checks.
-
-Cleanup refuses the entire target set if project Git now tracks any target or
-the owned exclusion markers are malformed. It also rejects observed edits,
-executable changes, and unsupported file substitutions after inspection.
-Avoid concurrent editing or Git operations during cleanup: SPAS cannot lock out
-noncooperating tools between its checks and filesystem operations.
-
-If cleanup or unlink metadata updates fail, the link remains available for a
-retry. Already removed synchronized files can be restored by synchronization;
-approved discarded unsynchronized bytes cannot be reconstructed by SPAS.
-`--remove-private-clone` separately removes the internal checkout during unlink.
-If that optional cleanup fails after unlink succeeds, the command returns
-nonzero, states that the workspace is already unlinked, and names the retained
-checkout paths.
-
-### Non-Interactive & CI Automation
-
-Pass `--json` and explicit policies to run SPAS in automated pipelines without SPAS prompts:
-
-```bash
-spas sync --json \
-  --timeout 5m \
-  --message "Update CI environment assets" \
-  --conflict abort \
-  --existing-exclude preserve \
-  --merge-protection skip
-```
-
-Provision Git credentials before the run. Unattended execution disables Git
-terminal and askpass prompts, uses batch mode for the default OpenSSH transport,
-and disables Git Credential Manager interaction. SSH requires a verified known
-host and a usable key or agent; HTTPS requires a helper that supplies stored
-credentials without interaction. Custom SSH commands and other credential
-helpers need their own unattended configuration; SPAS cannot control arbitrary
-helper dialogs. These controls also apply to nonterminal runs and implicit
-fetches when reading a partial project clone. SPAS does not change global Git
-or SSH settings.
-
-`--timeout` sets a caller-selected deadline; omitting it leaves no deadline.
-Cancellation and timeout stop unattended Git and its attached SSH/helper
-descendants. Detached helpers or external services remain outside SPAS's
-control. An interrupted push retains recovery state for the next `spas sync`.
-
-For complete details on all flags, exit codes, and policies, consult the [Command Reference](https://github.com/getspas/spas/wiki/Command-reference).
-
-Human output uses `--color=auto` by default, with separate capability checks for
-stdout and stderr. Automatic color is disabled for redirected destinations,
-non-interactive execution, CI, nonempty `NO_COLOR`, and unsupported terminals.
-Use `--color=always` to request color explicitly or `--color=never` for plain
-output. JSON, shell completion, `status --short`, and `diff --name-only` stay
-plain. Windows consoles require virtual-terminal processing already enabled;
-SPAS leaves console modes unchanged.
-
-`--progress=auto` shows real phases and available file counts on supported
-stderr terminals. `--progress=never` disables motion. Progress is independent
-of color and `NO_COLOR`, and commands with complete inputs can show it.
-Non-interactive, CI, redirected stderr, unsupported terminals, and machine
-output have no progress. Prompts suspend animation; Git output uses a stable
-phase line. SPAS clears progress on completion, failure, timeout, or cancellation.
-
----
+> [!IMPORTANT]
+> Use a private asset repository for sensitive files. SPAS stores files as
+> supplied; authorized readers, including GitHub, can read their contents. Sync before
+> destructive Git operations, which can overwrite or delete unsynced files.
+> [Read the safety boundaries](https://github.com/getspas/spas/wiki/Safety-and-limitations).
 
 ## Documentation & Community
 
-- 📖 [Documentation Wiki](https://github.com/getspas/spas/wiki)
-- 🚀 [Quick Start Guide](https://github.com/getspas/spas/wiki/Quick-start)
-- ⚙️ [Command Reference](https://github.com/getspas/spas/wiki/Command-reference)
-- 🛡️ [Safety & Limitations](https://github.com/getspas/spas/wiki/Safety-and-limitations)
-- 💬 [Discussions & Support](https://github.com/getspas/spas/discussions)
-- 🐛 [Report a Bug](https://github.com/getspas/spas/issues/new/choose)
-- 🔒 [Security Vulnerability Report](https://github.com/getspas/spas/security/advisories/new)
+| I want to… | Read |
+| :--- | :--- |
+| Preview, sync, remove, or unlink files | [Command reference](https://github.com/getspas/spas/wiki/Command-reference) |
+| Run SPAS in scripts | [Automation](https://github.com/getspas/spas/wiki/Command-reference#unattended-authentication) · [JSON output](https://github.com/getspas/spas/wiki/JSON-output-schema) |
+| Resolve a conflict or interrupted sync | [Troubleshooting](https://github.com/getspas/spas/wiki/Troubleshooting) |
+| Check supported files and filesystem limits | [Safety & limitations](https://github.com/getspas/spas/wiki/Safety-and-limitations) |
+
+[Ask a question](https://github.com/getspas/spas/discussions) · [Report a bug](https://github.com/getspas/spas/issues/new/choose) · [Report a security vulnerability](https://github.com/getspas/spas/security/advisories/new)

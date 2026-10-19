@@ -1,1 +1,1 @@
-[SPAS Repository](https://github.com/getspas/spas) · [Releases](https://github.com/getspas/spas/releases) · [Discussions & Q&A](https://github.com/getspas/spas/discussions)
+[Documentation home](Home) · [Install SPAS](Installation) · [Source code](https://github.com/getspas/spas) · [Releases](https://github.com/getspas/spas/releases) · [Discussions](https://github.com/getspas/spas/discussions)

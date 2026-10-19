@@ -2,7 +2,18 @@
 
 SPAS runs as a single executable on Linux, macOS, and Windows. It requires **Git 2.43.1 or newer**.
 
----
+Choose [a prebuilt binary](#1-download-prebuilt-binaries),
+[a source build](#3-build-from-source), or a package manager:
+
+| Platform | Installation options |
+| :--- | :--- |
+| macOS | [Homebrew](#homebrew-macos-and-linux) or a binary |
+| Windows | [Scoop](#scoop-windows) or a binary; [WinGet status](#winget-windows) |
+| Linux | [Standalone binary](#linux-standalone-binary), [DEB/RPM](#downloadable-linux-packages), or [Homebrew](#homebrew-macos-and-linux) if already installed |
+
+These instructions track `main`. Release assets and package-manager versions
+may lag behind it; check the selected release and `spas COMMAND --help` when
+using a released build.
 
 ## 1. Download Prebuilt Binaries
 
@@ -17,11 +28,37 @@ Visit the [GitHub Releases](https://github.com/getspas/spas/releases/latest) pag
 | **Windows** | x86_64 (`amd64`) | `spas_<VERSION>_windows_amd64.exe` |
 | **Windows** | ARM64 (`arm64`) | `spas_<VERSION>_windows_arm64.exe` |
 
-*(Replace `<VERSION>` with the release tag, e.g., `1.0.0`)*
+Replace `<VERSION>` with the version number without the leading `v`, for example
+`1.0.0`. Use the filenames listed on the release page for your chosen version.
+
+### Linux: standalone binary
+
+Choose `linux_amd64` for x86_64 or `linux_arm64` for AArch64. Install Git 2.43.1
+or newer and, for SSH authentication, an SSH client.
+
+[Verify the downloaded binary](#2-verify-release-authenticity-and-integrity),
+rename it to `spas`, then install it for your user from the download directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 ./spas "$HOME/.local/bin/spas"
+export PATH="$HOME/.local/bin:$PATH"
+spas version
+```
+
+The `export` applies to the current shell. If `~/.local/bin` is not already on
+your `PATH`, add that setting to your shell's configuration. To update, download
+and verify the new binary, then repeat the install step. Set up
+[shell completion](#5-shell-auto-completion) for your shell.
+
+For package-managed installation and removal, use [DEB or RPM packages](#downloadable-linux-packages)
+on compatible distributions, or [Homebrew](#homebrew-macos-and-linux) if you
+already use it.
 
 ### Rename & Add to PATH
 
-Rename the downloaded file to `spas` (or `spas.exe` on Windows) and move it to a directory included in your system's `PATH` (such as `/usr/local/bin` on Unix systems or `C:\Program Files\spas` on Windows). On macOS and Linux, run `chmod +x spas` to make it executable.
+Before running the download, [verify its provenance and checksum](#2-verify-release-authenticity-and-integrity).
+Then rename the downloaded file to `spas` (or `spas.exe` on Windows) and move it to a directory included in your system's `PATH` (such as `/usr/local/bin` on Unix systems or `C:\Program Files\spas` on Windows). On macOS and Linux, run `chmod +x spas` to make it executable.
 
 Verify the installation:
 
@@ -34,7 +71,7 @@ git --version
 
 ## 2. Verify Release Authenticity and Integrity
 
-SPAS releases provide GitHub build provenance attestations and a
+The release workflow produces GitHub build provenance attestations and a
 `checksums.txt` SHA-256 manifest. Use both checks: the attestation verifies
 that the binary was produced by this repository's release workflow, while
 the checksum detects corruption and provides a portable digest for other
@@ -54,7 +91,9 @@ macOS binaries have GitHub build attestations but are not Apple Developer ID
 signed or notarized. Downloaded binaries may prompt a macOS security warning;
 use the source-built Homebrew formula or `go install` if you prefer a local build.
 
-Every release includes an official `checksums.txt` file containing SHA-256 digests. Download `checksums.txt` into the same folder as the release binary and verify the integrity:
+Download the release’s `checksums.txt` into the same folder as the binary.
+The examples below use Linux/Windows AMD64 and macOS ARM64; substitute the
+filename for your architecture, then compare the hashes:
 
 ### Linux
 
@@ -77,9 +116,9 @@ Get-FileHash .\spas_*_windows_amd64.exe -Algorithm SHA256
 Select-String -Path .\checksums.txt -Pattern "windows_amd64"
 ```
 
-The output hash must match the value listed in `checksums.txt`. A checksum
-match is not a substitute for the provenance check above because the binary
-and checksum file are distributed through the same release channel.
+The output hash must match the value listed in `checksums.txt`. Verify the
+attestation as well: it establishes build provenance, while the checksum checks
+the downloaded bytes.
 
 ---
 
@@ -91,7 +130,8 @@ Building from source requires **Go 1.26.9 or newer**:
 go install -trimpath github.com/getspas/spas@latest
 ```
 
-The compiled binary will be installed to `$GOBIN` (or `$GOPATH/bin`). Make sure this directory is in your `PATH`:
+Go installs the binary in `$GOBIN`, or in `$GOPATH/bin` when `GOBIN` is unset.
+Add that directory to your `PATH`. With the default location on macOS or Linux:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
@@ -118,18 +158,14 @@ brew uninstall spas
 
 Homebrew installs Go as a build dependency and Git as a runtime dependency.
 SPAS requires Git 2.43.1 or newer.
-Go is not needed to run the installed binary. This route does not require Apple
-Developer ID signing or notarization.
+The resulting binary runs directly on your machine.
 
 ### WinGet: Windows
 
-Install SPAS in your user account:
-
-```powershell
-winget install --exact --id GetSPAS.SPAS --source winget --scope user
-winget upgrade --exact --id GetSPAS.SPAS --source winget --scope user
-winget uninstall --exact --id GetSPAS.SPAS --scope user
-```
+The [WinGet submission](https://github.com/microsoft/winget-pkgs/pull/455022)
+is pending as of October 19, 2026. Use [Scoop](#scoop-windows) or a
+[standalone binary](#1-download-prebuilt-binaries) until the package is available
+in the WinGet community source.
 
 ### Scoop: Windows
 
@@ -142,8 +178,8 @@ scoop update spas
 scoop uninstall spas
 ```
 
-Scoop installs into your user environment by default. Installation does not
-modify your PowerShell profile or move SPAS configuration or private assets.
+Scoop installs into your user environment by default and preserves your
+PowerShell profile, SPAS configuration, and managed files.
 
 ### Downloadable Linux Packages
 
@@ -184,7 +220,11 @@ update Git through a supported source instead of bypassing the dependency.
 
 ## 5. Shell Auto-Completion
 
-SPAS includes built-in auto-completion support for Bash, Zsh, Fish, and PowerShell.
+SPAS generates completion scripts for Bash, Zsh, Fish, and PowerShell. The
+examples below install them persistently; use the
+[command reference](Command-reference#spas-completion) to load them for one session.
+Create the destination directory if needed and use a location your shell loads
+and your user can write to.
 
 ### Bash
 

@@ -1,6 +1,20 @@
 # Command Reference
 
-SPAS commands are interactive by default. For scripts and continuous integration (CI), supply decisions through CLI flags. Use `--json` for structured output with prompts disabled.
+Commands with complete inputs run directly. SPAS prompts only for missing
+inputs or decisions when a terminal is available. In scripts, supply those
+choices through flags; `--non-interactive` and `--json` disable prompts.
+
+[Global options](#global-options) · [Automation](#unattended-authentication) · [Exit codes](#exit-code-reference-table)
+
+| Task | Command |
+| :--- | :--- |
+| Connect a workspace | [`link`](#spas-link) |
+| Select or remove files | [`add`](#spas-add) · [`remove`](#spas-remove) |
+| Exchange changes with GitHub | [`sync`](#spas-sync) |
+| Inspect local state and edits | [`status`](#spas-status) · [`diff`](#spas-diff) |
+| Diagnose a problem | [`doctor`](#spas-doctor) |
+| Stop managing a workspace | [`unlink`](#spas-unlink) |
+| Set up completion or check the build | [`completion`](#spas-completion) · [`version`](#spas-version) |
 
 ---
 
@@ -24,6 +38,8 @@ The following flags apply to all SPAS commands:
 
 > [!NOTE]
 > `-y` / `--yes` automatically accepts non-destructive setup suggestions. It does *not* authorize committing assets, deleting files, overriding tracked repository paths, discarding uncommitted workspace changes, or resolving merge conflicts.
+
+### Color and progress
 
 Human output uses restrained color for result labels, diagnostic statuses,
 warnings, errors, and Git diffs. Each destination is checked separately:
@@ -74,7 +90,7 @@ spas link [OWNER/REPOSITORY | GITHUB-URL] [flags]
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--transport` | `https` \| `ssh` | *Prompt* / `https` | Git transport protocol for `OWNER/REPOSITORY` references (defaults to `https` in non-interactive mode) |
-| `--branch` | String | *Auto* | Target branch in the linked repository (required for empty repositories) |
+| `--branch` | String | *Discover on first sync* | Target asset branch; supply it at link or first sync for an empty repository |
 | `--replace` | Flag | `false` | Replace an unused, pristine link association without deleting its clone |
 | `--dry-run` | Flag | `false` | Validate arguments and display proposed link settings without saving or network access |
 
@@ -102,6 +118,9 @@ spas add PATH... [flags]
 ```
 
 `spas add` operates offline. It registers paths in local SPAS state and adds corresponding exclusion patterns to `.git/info/exclude`. Your project `.gitignore` remains unchanged. Link state determines enrollment; editing exclusions does not change the managed asset set. Exclusion-writing commands rebuild missing or edited owned rules and report unexpected repairs on stderr (JSON code `exclusion_drift_repaired`). Ordinary requested enrollment/removal changes stay quiet. See [Safety and Limitations](Safety-and-limitations) for ownership markers, manual repair, and concurrency limits.
+
+Passing a directory enrolls its current supported files recursively. New files
+created there later need another `spas add`.
 
 Enrollment uses the actual native directory-entry spelling. Distinct case or
 Unicode entries remain independent when both destinations support them. Imported
@@ -139,7 +158,13 @@ Mark managed assets for removal on the next synchronization.
 spas remove PATH... [flags]
 ```
 
-`spas remove` registers a pending deletion in local state; it does not immediately delete workspace files or push to GitHub.
+`spas remove` records a pending deletion. The next approved sync removes the
+asset from the workspace and asset branch; other linked machines receive that
+deletion when they sync. Existing Git history retains earlier versions.
+
+If you delete a previously synced file with your editor or file manager, the
+next sync restores it. If a file changes after you request removal, sync keeps
+the changed file and defers its removal.
 
 > [!TIP]
 > **Pending Additions:** If you remove a file that was added with `spas add` but has not yet been synced to GitHub, SPAS cancels the enrollment immediately, removes the exclusion rule, and leaves the workspace file intact.
@@ -170,12 +195,15 @@ spas sync --abort
 During a normal sync:
 
 1. SPAS clones or fetches the linked repository.
-2. Prompts for approval to create a commit in the linked repository.
+2. Snapshots local asset changes and requests commit approval if needed.
+   `--message` or `--message-file` supplies that approval.
 3. Merges remote updates.
 4. Pushes commits to GitHub (without force-pushing).
-5. Materializes updated files safely in your project workspace.
+5. Verifies local exclusions and applies the updated files to your workspace.
 
-SPAS never creates commits in your project repository.
+SPAS commits to the fixed asset branch selected for the link. Project branches
+and commits retain their own history. A dry-run reads locally available state;
+before checkout initialization, it reports that network access is required.
 
 | Option | Values | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -184,7 +212,7 @@ SPAS never creates commits in your project repository.
 | `--conflict` | `ask` \| `skip` \| `override` \| `abort` | `ask` | Policy for path collisions between project repo and managed assets |
 | `--force` | Flag | `false` | Convenience alias for `--conflict=override` |
 | `--skip-conflicts` | Flag | `false` | Convenience alias for `--conflict=skip` |
-| `--discard-public-changes` | Flag | `false` | Allow overriding uncommitted workspace changes during ownership transfer |
+| `--discard-public-changes` | Flag | `false` | Approve discarding staged or unstaged project changes during ownership transfer or merge continuation; requires `--force`, `--conflict=override`, or `--continue` |
 | `--existing-exclude` | `ask` \| `preserve` \| `abort` | `ask` | Policy for existing rules in `.git/info/exclude` |
 | `--merge-protection` | `ask` \| `enable` \| `skip` \| `require` | `ask` | Policy for Git merge protection settings |
 | `--branch` | String | — | Specify the branch during first synchronization |
@@ -252,6 +280,10 @@ spas status --show-paths
 ## `spas diff`
 
 Compare managed assets in your local project workspace against the local managed checkout.
+Before checkout initialization, diff lists changed paths. After initialization,
+it compares local file contents. Both modes use locally available state.
+
+### Path selection
 
 File selection reads existing directory entries without creating a workspace
 probe. Exact stored spellings take priority. An existing case or Unicode alias
@@ -281,7 +313,7 @@ spas diff [PATH...] [flags]
 | `--staged` | Flag | `false` | Display changes staged during an interrupted synchronization |
 
 > [!WARNING]
-> Standard `spas diff` output prints raw asset content. Do not paste full diffs into public issue trackers or chat rooms. Use `--stat` or `--name-only` when sharing diagnostics.
+> Standard `spas diff` output prints raw asset content. Do not paste full diffs into public issue trackers or chat rooms. Use `--stat` or `--name-only` to omit contents, and review filenames before sharing.
 
 ---
 
@@ -294,7 +326,7 @@ spas doctor [flags]
 ```
 
 - When run with `--json`, `spas doctor` outputs a single diagnostic JSON object to stdout.
-- Returns exit code `0` when healthy, or nonzero when issues require attention.
+- Returns exit code `0` when checks have no errors, including when warnings are present. Error findings return exit code `1`.
 - When no Git repository is found, or the repository is not linked, `doctor` runs the available environment checks (Git version, data directories, advisory locking, and worktree shape where applicable). If those checks pass, it exits `0` with a `workspace` or `link-state` warning explaining that link checks were skipped.
 - Failed repository inspection is an error. Corrupt configuration, unreadable or unrecognized Git metadata, cancellation, and invalid Git output produce an unhealthy result and nonzero status. A no-repository warning requires Git's absence diagnostic and no `.git` marker in the physical directory ancestry; existing metadata that Git cannot inspect requires attention.
 
@@ -318,6 +350,10 @@ spas unlink [flags]
 | `--remove-private-clone` | Flag | `false` | Delete the local managed checkout from storage |
 | `--force` | Flag | `false` | Allow unlink despite pending synchronization or checkout recovery; does not approve workspace deletion or unsynchronized discard |
 
+By default, unlink keeps workspace files and the managed checkout. It removes
+SPAS's owned exclusions and restores branch merge options that SPAS managed.
+The GitHub asset repository is retained.
+
 Rules outside the exact owned block are preserved. If old ownership markers no longer match, those rules remain external and may survive unlink; review them manually if files stay ignored.
 
 Cleanup checks every owned target for project Git ownership and validates the
@@ -338,13 +374,20 @@ spas unlink --force --remove-files --approve-remove-files \
   --discard-unsynced-changes --non-interactive
 ```
 
+Avoid editing files or running project Git operations during cleanup. SPAS
+rejects changes it observes after inspection, but cannot lock out other tools.
+If workspace cleanup or metadata updates fail, the link remains available for a
+retry. Cleanup across multiple files is not atomic. Synchronized contents can
+be restored by sync; approved discarded unsynchronized bytes cannot. See
+[cleanup boundaries](Safety-and-limitations#7-unlink-cleanup).
+
 The managed checkout stays unless `--remove-private-clone` is supplied. Cleanup
 failure after link removal returns nonzero, states that unlink succeeded, and
 names the retained checkout paths.
 
 > [!WARNING]
 >
-> Unlinking with `--keep-files` removes the `.git/info/exclude` rules. Git will immediately see those files as untracked. Review `git status` before committing to avoid accidental secret leaks.
+> Unlinking with `--keep-files` removes the `.git/info/exclude` rules. Those files may become eligible for project Git staging unless other ignore rules still apply. Review `git status` before committing to avoid accidental secret leaks.
 
 ---
 
@@ -380,7 +423,10 @@ spas version
 
 ## Exit Codes, JSON Schemas & Errors
 
-When using `--json`, all responses (including errors) adhere to the versioned [JSON Output Schema](JSON-output-schema).
+With `--json`, command results go to stdout and warnings/errors go to stderr
+using the versioned [JSON output schema](JSON-output-schema). Decode stderr as
+newline-delimited JSON records; a successful command can still emit warnings.
+Help and shell completion retain their text or script formats.
 
 Errors are returned as structured JSON objects with `schemaVersion`:
 
@@ -417,6 +463,22 @@ Errors are returned as structured JSON objects with `schemaVersion`:
 remote Git operations. User signals return exit code `130` (`interrupted`).
 
 ### Unattended authentication
+
+For a linked workspace, this command supplies a commit message, explicit
+policies, a timeout, and JSON output:
+
+```bash
+spas sync --json \
+  --timeout 5m \
+  --message "Update local configuration and fixtures" \
+  --conflict abort \
+  --existing-exclude preserve \
+  --merge-protection skip
+```
+
+`--conflict abort` stops on project-path ownership conflicts. This example uses
+`--merge-protection skip`, which leaves branch merge settings to you; choose
+`enable` to let SPAS configure the [supported protection](#verified-merge-protection).
 
 Complete inputs run directly. `--non-interactive`, `--json`, or nonterminal
 input/output prevents SPAS prompts; a missing decision returns exit code 4 and

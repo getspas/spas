@@ -1,5 +1,9 @@
 # SPAS Schema Contracts
 
+For scripts that consume command output, start with the
+[JSON output reference](JSON-output-schema). This page also covers SPAS's
+internal state format for maintainers and recovery tooling.
+
 SPAS has two independent versioned contracts. A schema version identifies the
 format and meaning of a record, independently of the SPAS release version.
 

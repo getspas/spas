@@ -1,84 +1,74 @@
 # SPAS Documentation
 
-SPAS keeps private and environment-specific assets in your local project workspace and synchronizes them with a separate GitHub repository. The managed assets remain untracked in your main project repository.
-
----
+SPAS synchronizes your personal project files across your machines through a
+separate GitHub repository. Files stay at their usual workspace paths and are
+excluded from the project repository through local Git rules.
 
 ## Getting Started
 
-1. **[Installation](Installation)** — Download prebuilt binaries, verify checksums, or compile from source.
-2. **[Quick Start Guide](Quick-start)** — Connect your workspace, select private files, and run your first synchronization.
-3. **[Command Reference](Command-reference)** — Complete syntax, flags, automation recipes, and exit code reference for all CLI commands.
-4. **[JSON Output Schema](JSON-output-schema)** — Structured payload contracts and schema versioning for CI/CD automation.
-5. **[Troubleshooting Guide](Troubleshooting)** — Diagnose errors with `spas doctor`, resolve merge conflicts, and sanitize debug logs.
-6. **[Safety & Limitations](Safety-and-limitations)** — Review security models, worktree constraints, and supported file types.
+[Install SPAS](Installation), then follow the [quick start](Quick-start) to link
+your project, select files, and run your first sync.
 
----
+These docs follow the source on `main`. If you use a released build, check
+`spas version` and `spas COMMAND --help` for the options available in that build.
 
 ## Documentation Index
 
-| Guide | Description |
+| Task | Guide |
 | :--- | :--- |
-| **[Installation](Installation)** | Installation instructions for Linux, macOS, and Windows with SHA-256 verification and shell completion setup. |
-| **[Quick Start](Quick-start)** | Step-by-step walkthrough linking a workspace, managing assets, and syncing across developer machines. |
-| **[Command Reference](Command-reference)** | Detailed documentation of all commands (`link`, `add`, `remove`, `sync`, `status`, `diff`, `doctor`, `unlink`). |
-| **[JSON Output Schema](JSON-output-schema)** | Machine-readable JSON output schemas, error envelopes, and automation payloads. |
-| **[Schema Contracts](Schemas)** | Independent persisted-state and CLI JSON versions, compatibility policy, and recovery field reference. |
-| **[Troubleshooting](Troubleshooting)** | Practical solutions for common errors, conflict resolution procedures, and recovery flows. |
-| **[Safety & Limitations](Safety-and-limitations)** | Security boundaries, filesystem concurrency models, supported file modes, and resource limits. |
-
----
+| Choose an installation method, verify a download, or set up completion | [Installation](Installation) |
+| Set up your first workspace and a second machine | [Quick start](Quick-start) |
+| Look up commands, flags, terminal settings, or automation examples | [Command reference](Command-reference) |
+| Parse command results, warnings, and errors | [JSON output schema](JSON-output-schema) |
+| Check persisted-state and output compatibility | [Schema contracts](Schemas) |
+| Diagnose failures, resolve conflicts, or resume a sync | [Troubleshooting](Troubleshooting) |
+| Understand access controls, supported paths, and recovery limits | [Safety & limitations](Safety-and-limitations) |
 
 ## Core Concepts & Architecture
 
-SPAS separates project files from managed assets while keeping both in the workspace:
-
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        Project Workspace                        │
-│                                                                 │
-│   ┌────────────────────────┐      ┌─────────────────────────┐   │
-│   │     Tracked Files      │      │     Managed Assets      │   │
-│   │    (Main Git Repo)     │      │     (SPAS Managed)      │   │
-│   └───────────▲────────────┘      └────────────▲────────────┘   │
-│               │                                │                │
-│               │     Excluded from Main Repo    │                │
-│               │   ◄─────────────────────────   │                │
-│               │      (.git/info/exclude)       │                │
-└───────────────┼────────────────────────────────┼────────────────┘
-                │                                │
-         Normal Git Ops                      SPAS Sync
-      (git push / git pull)            (spas sync / checkout)
-                │                                │
-                ▼                                ▼
-        Main Git Remote              Linked GitHub Repository
-     (Public or Shared Repo)        (Dedicated Asset Storage)
+Project workspace
+├── Source files ────── git push / pull ── Project repository
+└── Managed assets ──── spas sync ──────── Asset repository on GitHub
+    (excluded from project Git)
 ```
 
-- **Project Repository:** Your primary Git repository containing application source code. Managed assets are kept untracked here via local exclusion rules.
-- **Project Workspace:** The active working tree of your project repository where your code, build scripts, and managed assets live.
-- **Linked Repository:** The dedicated GitHub repository (public or private) that stores and versions your managed assets.
-- **Managed Asset:** Any regular file enrolled with `spas add` whose contents and version history are synced to the linked repository.
-- **Managed Checkout:** The isolated local clone maintained by SPAS in your user data directory to stage, commit, and merge assets safely before writing them to the workspace.
+| Term | Meaning |
+| :--- | :--- |
+| Project workspace | The local directory where you work with source code and managed assets |
+| Project repository | The Git repository for your source code, whether public or private |
+| Asset repository | The separate GitHub repository that stores your managed files and their history |
+| Managed asset | A regular file selected for SPAS management |
+| Managed checkout | SPAS's local clone in your user data directory, used to prepare commits and merges |
+| Link | The association between a workspace and its asset repository and branch |
 
----
+### What gets synchronized
+
+- Run `spas add` to select files. Adding a directory selects its current supported
+  files; future files need another `add`.
+- Run `spas sync` whenever you want to exchange changes.
+- A missing previously synced file is restored on sync. Use `spas remove` to
+  request deletion from the asset repository and workspace.
+- Every linked machine uses the same asset set. Leave machine-specific files
+  unenrolled. Asset history uses the fixed branch selected for the link.
 
 ## Supported Boundary
 
-SPAS requires:
+SPAS runs on Windows, macOS, and Linux, on `amd64` and `arm64`, with Git 2.43.1+.
+Each project must have exactly one worktree and uses one asset repository and
+fixed branch. Regular text and binary files are supported; symlinks, junctions,
+submodules, and Git LFS pointers are not.
 
-- **Runtime Requirement:** Git 2.43.1 or newer.
-- **Worktree Model:** One project worktree per Git common directory.
-- **Branching:** One linked repository and fixed branch per project workspace.
-- **File Modes:** Standard regular files (`100644` standard and `100755` executable).
+Filename support depends on each machine's Git and filesystem. See
+[supported files and paths](Safety-and-limitations#4-supported-file-types--path-constraints)
+before sharing an asset set across operating systems.
 
-> [!NOTE]
-> SPAS deliberately rejects symlinks, directory junctions, Git submodules, Git LFS pointers, and directory ownership wildcards to ensure deterministic cross-platform synchronization. For complete details, see [Safety and Limitations](Safety-and-limitations).
-
----
+> [!IMPORTANT]
+> SPAS stores files as supplied. Repository access controls determine who can
+> read their contents. Destructive project Git commands and concurrent edits
+> during materialization can destroy unsynced changes.
+> See [safety & limitations](Safety-and-limitations).
 
 ## Community & Support
 
-- 💬 **Ask a question or share feedback:** [GitHub Discussions](https://github.com/getspas/spas/discussions)
-- 🐛 **Report a bug:** [Issue Tracker](https://github.com/getspas/spas/issues/new/choose)
-- 🔒 **Report security vulnerabilities:** [GitHub Security Advisories](https://github.com/getspas/spas/security/advisories/new)
+[Ask a question](https://github.com/getspas/spas/discussions) · [Report a bug](https://github.com/getspas/spas/issues/new/choose) · [Report a security vulnerability](https://github.com/getspas/spas/security/advisories/new)

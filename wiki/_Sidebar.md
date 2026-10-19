@@ -1,20 +1,24 @@
-### Documentation
+### Start here
 
-- [Home](Home)
-- [Installation](Installation)
-- [Quick Start](Quick-start)
-- [Command Reference](Command-reference)
-- [JSON Output Schema](JSON-output-schema)
-- [Schema Contracts](Schemas)
-- [Troubleshooting](Troubleshooting)
-- [Safety & Limitations](Safety-and-limitations)
+- [Documentation home](Home)
+- [Install SPAS](Installation)
+- [First sync & another machine](Quick-start)
 
-### Development
+### Use SPAS
 
-- [Contributing Guide](https://github.com/getspas/spas/blob/main/CONTRIBUTING.md)
+- [Command reference](Command-reference)
+- [Scripts & authentication](Command-reference#unattended-authentication)
+- [Troubleshooting & recovery](Troubleshooting)
+- [Safety & limitations](Safety-and-limitations)
 
-### Community & Support
+### Reference
+
+- [JSON output](JSON-output-schema)
+- [Schema contracts](Schemas)
+- [Contributing guide](https://github.com/getspas/spas/blob/main/CONTRIBUTING.md)
+
+### Community
 
 - [Discussions](https://github.com/getspas/spas/discussions)
-- [Report a Bug](https://github.com/getspas/spas/issues/new/choose)
-- [Security Advisories](https://github.com/getspas/spas/security/advisories/new)
+- [Report a bug](https://github.com/getspas/spas/issues/new/choose)
+- [Report a security vulnerability](https://github.com/getspas/spas/security/advisories/new)

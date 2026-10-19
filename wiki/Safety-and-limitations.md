@@ -1,14 +1,38 @@
 # Safety & Limitations
 
-SPAS stops immediately and reports the condition when it encounters an unsupported path, ambiguous Git state, or potential data race. Review these operational boundaries before using it in your workflows.
+SPAS validates paths, Git state, and exclusions before its own writes. Its
+locks and recovery records support interrupted operations, but other Git
+commands and concurrent editors can still destroy unsynchronized changes.
+
+[Access controls](#1-repository-visibility--access-control) · [Supported paths](#4-supported-file-types--path-constraints) · [Git safeguards](#5-git-safeguards--destructive-operations) · [Unlink cleanup](#7-unlink-cleanup)
 
 ---
 
 ## 1. Repository Visibility & Access Control
 
-- **Repository Visibility:** Link and sync probe anonymous readability with Git credential helpers and prompts disabled. Detected public readability emits a warning without requiring confirmation. Dry-run and local merge abort skip the probe. An unsuccessful probe does not prove private visibility; authenticated Git operations determine usability. Select storage with appropriate access controls for sensitive files. Authorized readers, including the storage provider, are trusted to read asset contents; SPAS provides no provider-blind encryption and does not define arbitrary providers' privacy semantics.
-- **Local Workspace Permissions:** SPAS keeps managed assets untracked in your project repository. Files it materializes during sync inherit standard Git checkout semantics — created with maximal modes filtered by your process umask, exactly as `git clone` of the linked repository would produce — and only Git's executable bit is preserved across machines. Recovery copies under the SPAS data directory remain owner-only. Anyone with local read access to your project workspace directory can read the files.
-- **Git URL Rewrites:** SPAS verifies its recorded origin URL, but respects your system and global Git configuration (including `url.*.insteadOf` and `pushInsteadOf` rewrites). Ensure your global Git configuration points to trusted remotes.
+### Repository visibility
+
+Use a private GitHub repository for sensitive assets. Anyone authorized to read
+it, including GitHub, can read the stored contents. SPAS stores files as supplied.
+
+Link and sync probe anonymous readability with credential helpers and prompts
+disabled. Detected public readability emits a warning without requiring approval.
+Dry-run and local merge abort skip the probe. An unsuccessful probe does not
+prove private visibility; authenticated Git operations determine usability.
+
+### Local file permissions
+
+SPAS keeps assets untracked in the project repository. Materialized files use
+standard Git checkout permissions, filtered by the process umask; only Git's
+executable bit is preserved across machines. Recovery copies in the SPAS data
+directory are owner-only. Anyone with local read access to workspace files can
+read their contents.
+
+### Git URL rewrites
+
+SPAS verifies its recorded origin URL and respects system and global Git
+configuration, including `url.*.insteadOf` and `pushInsteadOf` rewrites. Check
+that those settings point to trusted remotes.
 
 ---
 
@@ -24,9 +48,9 @@ SPAS stops immediately and reports the condition when it encounters an unsupport
 
 | Invariant | Requirement | Rationale |
 | :--- | :--- | :--- |
-| **Sole Worktree Rule** | Exactly one active worktree per Git common directory (`.git`). | Prevents exclusion collision across sibling worktrees. |
+| **Sole Worktree Rule** | Exactly one worktree record, with the worktree Git directory matching the common directory. | Linked worktrees and repositories with additional worktrees are rejected for mutations. |
 | **Single Linked Repo** | One linked GitHub repository per project workspace. | Eliminates ambiguous multi-remote ownership. |
-| **Dedicated Branch** | One fixed branch bound at initialization. | Ensures linear, deterministic asset history. |
+| **Dedicated Branch** | One fixed asset branch bound at initialization. | Asset commits and merges use that branch across linked machines. |
 
 ---
 
@@ -44,11 +68,26 @@ SPAS stops immediately and reports the condition when it encounters an unsupport
 - **Submodules & LFS Pointers:** Git submodules and Git LFS pointer files are not supported.
 - **Special Git Files:** `.gitignore`, `.gitattributes`, and `.gitmodules` cannot be managed by SPAS.
 - **Unicode Control & Format Characters:** Control characters and Unicode category `Cf` characters (such as U+200C ZWNJ and U+200D ZWJ) are rejected to prevent homograph and visual spoofing issues.
-- **Host Filename Syntax:** Punctuation, Windows device-name spellings, and trailing dots or spaces are accepted on hosts whose Git and filesystem operations support them. Windows rejects its reserved names and characters, alternate data streams, and trailing dots or spaces. Git-ignore metacharacters and literal backslashes on Unix are escaped in exclusions and treated literally by Git operations. Compatibility of an asset set across machines is the user's responsibility; failed native operations report the affected path.
-- **State and Exclusion Representation:** Paths must be valid UTF-8 and contain no control or Unicode format characters. These are SPAS representation and safety restrictions, separate from native filename rules. Paths cannot escape the workspace, traverse unsafe ancestors, or address Git metadata or SPAS's reserved temporary directory.
-- **Native Path Identity:** Exact Git spellings remain separate from filesystem equivalence. Case and Unicode variants can coexist when both actual destinations distinguish them. SPAS probes the relevant existing parent directories, rejects real file/file or file/directory aliases before application, and preserves each asset's content and executable state independently. Imported Git names are not silently rewritten to NFC. Enrollment observes the native directory-entry spelling. On normalization-aliasing filesystems, owned exclusions also cover Git's precomposed enumeration spelling. Changing `core.ignoreCase` cannot make a destination represent distinct files.
-- **Native Path Lengths:** SPAS imposes no fixed filename-component byte ceiling or Windows absolute-path ceiling. The actual Git and filesystem operations determine support in the workspace, managed checkout, and recovery storage. UTF-8 byte counts, character counts, and native path limits are different measures; root lengths and configuration also affect support. Failures identify the operation and path without renaming or truncating assets or reporting completed synchronization. A pending synchronization journal remains available for retry after a later failure; resolve the native problem before retrying. Tree-entry, metadata, and captured-output bounds remain separate resource limits.
-- **Windows Working Directories:** Windows process creation can reject a long working directory even when individual file operations support longer paths. If Git cannot start in the named directory, use a shorter project workspace or SPAS data root. Enabling Git's `core.longpaths` for file operations does not remove this process-launch limit.
+
+### Host Filename Syntax
+
+Punctuation, Windows device-name spellings, and trailing dots or spaces are accepted on hosts whose Git and filesystem operations support them. Windows rejects its reserved names and characters, alternate data streams, and trailing dots or spaces. Git-ignore metacharacters and literal backslashes on Unix are escaped in exclusions and treated literally by Git operations. Compatibility of an asset set across machines is the user's responsibility; failed native operations report the affected path.
+
+### State and Exclusion Representation
+
+Paths must be valid UTF-8 and contain no control or Unicode format characters. These are SPAS representation and safety restrictions, separate from native filename rules. Paths cannot escape the workspace, traverse unsafe ancestors, or address Git metadata or SPAS's reserved temporary directory.
+
+### Native Path Identity
+
+Exact Git spellings remain separate from filesystem equivalence. Case and Unicode variants can coexist when both actual destinations distinguish them. SPAS probes the relevant existing parent directories, rejects real file/file or file/directory aliases before application, and preserves each asset's content and executable state independently. Imported Git names are not silently rewritten to NFC. Enrollment observes the native directory-entry spelling. On normalization-aliasing filesystems, owned exclusions also cover Git's precomposed enumeration spelling. Changing `core.ignoreCase` cannot make a destination represent distinct files.
+
+### Native Path Lengths
+
+SPAS imposes no fixed filename-component byte ceiling or Windows absolute-path ceiling. The actual Git and filesystem operations determine support in the workspace, managed checkout, and recovery storage. UTF-8 byte counts, character counts, and native path limits are different measures; root lengths and configuration also affect support. Failures identify the operation and path without renaming or truncating assets or reporting completed synchronization. A pending synchronization journal remains available for retry after a later failure; resolve the native problem before retrying. Tree-entry, metadata, and captured-output bounds remain separate resource limits.
+
+### Windows Working Directories
+
+Windows process creation can reject a long working directory even when individual file operations support longer paths. If Git cannot start in the named directory, use a shorter project workspace or SPAS data root. Enabling Git's `core.longpaths` for file operations does not remove this process-launch limit.
 
 ---
 
@@ -62,7 +101,8 @@ Malformed or duplicate matching markers cause exit 9. Inspect the exclude file n
 
 SPAS rereads and rebuilds under its advisory lock, preserving outside edits completed before that read. The lock does not prevent a noncooperating editor from racing atomic replacement, removing exclusions later, or exposing files between commands. Avoid concurrent writes during SPAS mutations and edit outside its block.
 
-The local exclusion block prevents standard Git operations from tracking managed files. However, it is subject to Git precedence rules:
+The owned block keeps managed files out of ordinary Git staging when its rules
+remain effective. Git precedence rules and explicit overrides still apply:
 
 > [!WARNING]
 >
@@ -119,10 +159,11 @@ nonzero and names the remaining checkout paths. The workspace remains unlinked.
 
 ## Summary Checklist
 
-- [x] Set linked GitHub repository visibility to **Private** for sensitive assets.
-- [x] Ensure your repository is a single worktree.
-- [x] Use regular files (avoid symlinks, junctions, or submodules).
-- [x] Run `spas sync` regularly to keep assets safely backed up on GitHub.
+- Use a private asset repository for sensitive files and review who can read it.
+- Keep exactly one project worktree and use supported regular files.
+- Sync before switching machines or running destructive project Git commands.
+- Avoid editing assets while SPAS is applying or deleting them.
+- Review `git status` before committing, especially after unlinking.
 
 ## Development link-state compatibility
 
